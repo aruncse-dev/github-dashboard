@@ -1218,7 +1218,8 @@ async function runDiagnostics(): Promise<void> {
     add({ label: 'Can read commit statuses', ok: status.ok, detail: status.ok ? 'OK' : status.message });
     const runs = await probe(`${path}/commits/${firstPr.head.sha}/check-runs?per_page=1`);
     add({ label: 'Can read check runs', ok: runs.ok, detail: runs.ok ? 'OK' : runs.message });
-    if (!status.ok || !runs.ok) hints.push('To show CI results, give the token “Commit statuses: Read” (and “Checks: Read” if your token settings offer it; “Actions: Read” covers GitHub Actions runs).');
+    if (!status.ok) hints.push('To show commit statuses, give the token “Commit statuses: Read”.');
+    if (!runs.ok) hints.push('To show check runs (including GitHub Actions results and their error annotations), give the token “Checks: Read”. “Actions: Read” doesn’t cover check runs.');
   } else {
     add({ label: 'Checks / statuses', ok: null, detail: 'skipped (no pull request to test with)' });
   }

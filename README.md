@@ -48,7 +48,19 @@ Installing needs **HTTPS**, so use the GitHub Pages URL. A plain `http://192.168
 | Token type | Needs |
 |---|---|
 | **Classic** (simplest) | `repo`, `read:org` |
-| **Fine-grained** | Resource owner = the org. Repository access = the repos you want. Permissions: **Pull requests** (read and write), **Contents** (read and write, needed to merge), **Commit statuses** (read), **Actions** (read), **Metadata** (read) |
+| **Fine-grained** | Resource owner = the org. Repository access = the repos you want. Organization permissions: none. Repository permissions by feature: |
+
+| Feature | Fine-grained permission |
+|---|---|
+| Anything (always on) | Metadata: Read (automatic) |
+| PR list, details, files changed, labels, comments | Pull requests: Read |
+| Approve / request changes / comment | Pull requests: Read and write |
+| Merge | Contents: Read and write |
+| Check status on cards and in details | Commit statuses: Read |
+| Check names, results and error annotations (incl. GitHub Actions) | Checks: Read |
+
+The smallest useful token: **Pull requests: Read**, **Commit statuses: Read** and **Checks: Read**. Make Pull requests *Read and write* to approve, and add *Contents: Read and write* only if you merge from the app. Actions: Read isn't used.
+
 
 Notes for fine-grained tokens:
 - They can't list your organizations. The app works out the orgs from the repositories the token can reach, or you can type an org name in the org picker.
