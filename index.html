@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="referrer" content="no-referrer">
+    <meta name="theme-color" content="#f6f8fa" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#151b23" media="(prefers-color-scheme: dark)">
+    <title>PR Dashboard</title>
+    <!-- Installable app (PWA) -->
+    <link rel="manifest" href="%BASE_URL%manifest.webmanifest">
+    <link rel="apple-touch-icon" href="%BASE_URL%icons/apple-touch-icon.png">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="PR Dashboard">
+    <meta name="application-name" content="PR Dashboard">
+    <!-- Render-blocking stylesheet: no flash of unstyled content (dev and build). -->
+    <link rel="stylesheet" href="/src/styles.css">
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='.5' y='.5' width='31' height='31' rx='7.5' fill='%230d1117' stroke='%23ffffff26'/%3E%3Cpath transform='translate%284 4%29 scale%281.3%29' fill='%23fff' d='M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z'/%3E%3Ccircle cx='24' cy='24' r='7.25' fill='%231f883d' stroke='%230d1117' stroke-width='1.5'/%3E%3Cpath transform='translate%2819.6 19.6%29 scale%28.55%29' fill='%23fff' d='M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354Z'/%3E%3C/svg%3E">
+  </head>
+  <body>
+    <!-- Token screen -->
+    <section id="login" class="login-wrap hidden">
+      <div class="login-inner">
+        <div class="login-logo" data-logo></div>
+        <h1 class="login-title">Sign in to PR Dashboard</h1>
+        <form class="login" id="loginForm">
+          <div>
+            <label class="fl" for="token">Personal access token</label>
+            <input class="form-control" id="token" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="ghp_… or github_pat_…" required>
+          </div>
+          <p class="login-error hidden" id="loginError" role="alert"></p>
+          <button class="btn btn-primary btn-lg" id="loginBtn" type="submit">Sign in</button>
+        </form>
+        <div class="callout">
+          <p>🔒 Your token is stored only in <b>this browser's local storage</b> and sent only to <code>api.github.com</code>. No server, no cloud.</p>
+          <p><b>Classic token:</b> scopes <code>repo</code> and <code>read:org</code>.</p>
+          <p><b>Fine-grained token:</b> resource owner = your org. Repository permissions: Pull requests (read and write), Contents (read and write), Commit statuses (read), Metadata (read).</p>
+          <p><a href="https://github.com/settings/tokens/new?scopes=repo,read:org&amp;description=PR%20Dashboard" target="_blank" rel="noopener noreferrer">Create a classic token →</a></p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Main app -->
+    <section id="app" class="hidden">
+      <header class="AppHeader">
+        <div class="hdr">
+          <div class="hdr-mark" data-logo></div>
+          <div class="crumbs"><b>Pull requests</b></div>
+          <button class="btn btn-sm hidden" id="installBtn" title="Install as an app"><span data-icon="download"></span>Install</button>
+          <button class="btn btn-invisible btn-icon" id="themeBtn" title="Theme: auto" aria-label="Toggle theme">◐</button>
+          <button class="btn btn-invisible btn-icon" id="refreshBtn" title="Refresh" aria-label="Refresh" data-icon="sync"></button>
+          <button class="btn btn-invisible btn-icon" id="logoutBtn" title="Forget token on this device" aria-label="Forget token" data-icon="signout"></button>
+          <img class="avatar" id="meAvatar" alt="" referrerpolicy="no-referrer">
+        </div>
+      </header>
+
+      <main>
+        <div class="subnav">
+          <div class="ctx" aria-label="Organization and repository">
+            <button class="ctx-btn ctx-org" id="ownerBtn" aria-haspopup="dialog" title="Change organization">
+              <img class="avatar sm hidden" id="ownerAvatar" alt="" referrerpolicy="no-referrer">
+              <b id="ownerBtnLabel">…</b>
+              <span data-icon="triangle" class="c-muted"></span>
+            </button>
+            <span class="ctx-sep">/</span>
+            <button class="ctx-btn ctx-repo" id="repoBtn" aria-haspopup="dialog" title="Change repository">
+              <span data-icon="repo" class="c-muted"></span>
+              <b id="repoBtnLabel">…</b>
+              <span data-icon="triangle" class="c-muted"></span>
+            </button>
+          </div>
+          <div class="search">
+            <span data-icon="search"></span>
+            <input class="form-control" id="q" type="search" placeholder="Search or filter: author:, label:, review:…" aria-label="Search pull requests" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search">
+            <div class="suggest hidden" id="qSuggest" role="listbox" aria-label="Search suggestions"></div>
+          </div>
+        </div>
+
+        <div class="chips" role="toolbar" aria-label="Quick filters">
+          <button class="chip" data-chip="" aria-pressed="true">All</button>
+          <button class="chip" data-chip="requested" title="Waiting for your review">To review</button>
+          <button class="chip" data-chip="mine" title="Opened by you">Mine</button>
+          <button class="chip" data-chip="ready" title="Approved, checks passed, not a draft">Ready to merge</button>
+        </div>
+
+        <div class="seg" role="group" aria-label="State">
+          <button data-tab="open" aria-pressed="true"><span data-icon="open"></span><span id="openCount">–</span> Open</button>
+          <button data-tab="closed" aria-pressed="false"><span data-icon="check"></span><span id="closedCount">–</span> Closed</button>
+        </div>
+
+        <div id="listError" class="error-box hidden" role="alert"></div>
+        <div class="pr-list" id="list"></div>
+        <div class="paginate hidden" id="moreWrap"><button class="btn" id="moreBtn">Load more</button></div>
+      </main>
+    </section>
+
+    <!-- PR details -->
+    <div class="Overlay-backdrop hidden" id="detailSheet">
+      <div class="Overlay detail" role="dialog" aria-modal="true" aria-labelledby="detailTitle">
+        <div class="Overlay-header">
+          <div><h2 class="Overlay-title" id="detailTitle">Pull request</h2><p class="Overlay-desc" id="detailSub"></p></div>
+          <a class="btn btn-invisible btn-icon" id="detailGitHub" href="#" target="_blank" rel="noopener noreferrer" title="Open on GitHub" aria-label="Open on GitHub" data-icon="ext"></a>
+          <button class="btn btn-invisible btn-icon" data-close aria-label="Close" data-icon="x"></button>
+        </div>
+        <div class="Overlay-body" id="detailBody"></div>
+        <div class="Overlay-footer d-footer" id="detailFooter"></div>
+      </div>
+    </div>
+
+    <!-- Org / repo picker -->
+    <div class="Overlay-backdrop hidden" id="pickerSheet">
+      <div class="Overlay" role="dialog" aria-modal="true" aria-labelledby="pickerTitle" style="height:min(620px,92dvh)">
+        <div class="Overlay-header">
+          <div><h2 class="Overlay-title" id="pickerTitle">Select</h2><p class="Overlay-desc" id="pickerDesc"></p></div>
+          <button class="btn btn-sm" id="pickerSync" title="Fetch the latest list from GitHub"><span data-icon="sync"></span>Sync</button>
+          <button class="btn btn-invisible btn-icon" data-close aria-label="Close" data-icon="x"></button>
+        </div>
+        <div class="Overlay-body" style="padding-bottom:0">
+          <div class="seg" id="pickerTabs" role="group" aria-label="Show" style="margin:0">
+            <button data-ptab="fav" aria-pressed="true"><span data-icon="starFill"></span>Favourites <span class="Counter" id="pickerFavCount">0</span></button>
+            <button data-ptab="all" aria-pressed="false">All <span class="Counter" id="pickerAllCount">…</span></button>
+          </div>
+          <div class="picker-search">
+            <span data-icon="search"></span>
+            <input class="form-control" id="pickerQ" type="search" placeholder="Filter" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Filter">
+          </div>
+          <div class="picker-list" id="pickerList" role="listbox"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Review dialog -->
+    <div class="Overlay-backdrop hidden" id="reviewSheet">
+      <div class="Overlay" role="dialog" aria-modal="true" aria-labelledby="reviewTitle">
+        <div class="Overlay-header">
+          <div><h2 class="Overlay-title" id="reviewTitle">Finish your review</h2><p class="Overlay-desc" id="reviewSub"></p></div>
+          <button class="btn btn-invisible btn-icon" data-close aria-label="Close" data-icon="x"></button>
+        </div>
+        <div class="Overlay-body">
+          <textarea class="form-control" id="reviewBody" placeholder="Leave a comment (optional for approve)" aria-label="Review comment"></textarea>
+          <div class="radio-group">
+            <label class="radio"><input type="radio" name="event" value="COMMENT"><span><b>Comment</b><small>Submit general feedback without explicit approval.</small></span></label>
+            <label class="radio"><input type="radio" name="event" value="APPROVE" checked><span><b>Approve</b><small>Submit feedback and approve merging these changes.</small></span></label>
+            <label class="radio"><input type="radio" name="event" value="REQUEST_CHANGES"><span><b>Request changes</b><small>Submit feedback that must be addressed before merging.</small></span></label>
+          </div>
+        </div>
+        <div class="Overlay-footer">
+          <button class="btn" data-close>Cancel</button>
+          <button class="btn btn-primary" id="reviewConfirm">Submit review</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Merge dialog -->
+    <div class="Overlay-backdrop hidden" id="mergeSheet">
+      <div class="Overlay" role="dialog" aria-modal="true" aria-labelledby="mergeTitle">
+        <div class="Overlay-header">
+          <div><h2 class="Overlay-title" id="mergeTitle">Merge pull request</h2><p class="Overlay-desc" id="mergeSub"></p></div>
+          <button class="btn btn-invisible btn-icon" data-close aria-label="Close" data-icon="x"></button>
+        </div>
+        <div class="Overlay-body">
+          <div class="merge-box" id="mergeStatus"></div>
+          <div class="radio-group">
+            <label class="radio"><input type="radio" name="method" value="squash"><span><b>Squash and merge</b><small>The commits from this branch will be combined into one commit in the base branch.</small></span></label>
+            <label class="radio"><input type="radio" name="method" value="merge"><span><b>Create a merge commit</b><small>All commits from this branch will be added to the base branch via a merge commit.</small></span></label>
+            <label class="radio"><input type="radio" name="method" value="rebase"><span><b>Rebase and merge</b><small>The commits from this branch will be rebased and added to the base branch.</small></span></label>
+          </div>
+        </div>
+        <div class="Overlay-footer">
+          <button class="btn" data-close>Cancel</button>
+          <button class="btn btn-primary" id="mergeConfirm">Confirm merge</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Files changed dialog -->
+    <div class="Overlay-backdrop hidden" id="filesSheet">
+      <div class="Overlay wide" role="dialog" aria-modal="true" aria-labelledby="filesTitle">
+        <div class="Overlay-header">
+          <div><h2 class="Overlay-title" id="filesTitle">Files changed</h2><p class="Overlay-desc" id="filesSub"></p></div>
+          <button class="btn btn-invisible btn-icon" data-close aria-label="Close" data-icon="x"></button>
+        </div>
+        <div class="Overlay-body">
+          <div class="files-toolbar" id="filesSummary"></div>
+          <div class="files-list" id="filesList"></div>
+          <div class="paginate hidden" id="filesMoreWrap"><button class="btn" id="filesMoreBtn">Load more files</button></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="toasts" id="toasts" aria-live="polite"></div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

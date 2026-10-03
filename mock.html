@@ -1,0 +1,943 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>PR Dashboard (Mock)</title>
+<style>
+  /* Primer-style tokens (light) */
+  :root {
+    color-scheme: light;
+    --canvas: #ffffff; --canvas-subtle: #f6f8fa; --canvas-inset: #f6f8fa; --overlay: #ffffff;
+    --fg: #1f2328; --fg-muted: #59636e; --fg-onEmphasis: #ffffff;
+    --border: #d1d9e0; --border-muted: #d1d9e0b3;
+    --accent: #0969da; --accent-subtle: #ddf4ff;
+    --success: #1a7f37; --success-emphasis: #1f883d; --success-emphasis-hover: #1c8139; --success-subtle: #dafbe1;
+    --danger: #d1242f; --danger-subtle: #ffebe9;
+    --done: #8250df; --done-subtle: #fbefff;
+    --attention: #9a6700; --attention-subtle: #fff8c5;
+    --neutral-muted: #818b981f;
+    --btn-bg: #f6f8fa; --btn-hover: #eff2f5; --btn-border: #d1d9e0;
+    --underline-active: #fd8c73;
+    --diff-add-bg: #dafbe1; --diff-add-num: #aceebb; --diff-del-bg: #ffebe9; --diff-del-num: #ffcecb;
+    --diff-hunk-bg: #ddf4ff; --diff-hunk-num: #54aeff66;
+    --shadow-overlay: 0 1px 3px #1f232812, 0 8px 24px #42474e2e;
+    --backdrop: #1f232866;
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --canvas: #0d1117; --canvas-subtle: #151b23; --canvas-inset: #010409; --overlay: #151b23;
+    --fg: #f0f6fc; --fg-muted: #9198a1; --fg-onEmphasis: #ffffff;
+    --border: #3d444d; --border-muted: #3d444db3;
+    --accent: #4493f8; --accent-subtle: #388bfd1a;
+    --success: #3fb950; --success-emphasis: #238636; --success-emphasis-hover: #29903b; --success-subtle: #2ea04326;
+    --danger: #f85149; --danger-subtle: #f851491a;
+    --done: #ab7df8; --done-subtle: #ab7df826;
+    --attention: #d29922; --attention-subtle: #bb800926;
+    --neutral-muted: #656c7633;
+    --btn-bg: #212830; --btn-hover: #262c36; --btn-border: #3d444d;
+    --underline-active: #f78166;
+    --diff-add-bg: #2ea04326; --diff-add-num: #3fb9504d; --diff-del-bg: #f851491a; --diff-del-num: #f851494d;
+    --diff-hunk-bg: #388bfd1a; --diff-hunk-num: #388bfd66;
+    --shadow-overlay: 0 0 0 1px #3d444d, 0 16px 32px #010409d9;
+    --backdrop: #010409cc;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --canvas: #0d1117; --canvas-subtle: #151b23; --canvas-inset: #010409; --overlay: #151b23;
+      --fg: #f0f6fc; --fg-muted: #9198a1; --fg-onEmphasis: #ffffff;
+      --border: #3d444d; --border-muted: #3d444db3;
+      --accent: #4493f8; --accent-subtle: #388bfd1a;
+      --success: #3fb950; --success-emphasis: #238636; --success-emphasis-hover: #29903b; --success-subtle: #2ea04326;
+      --danger: #f85149; --danger-subtle: #f851491a;
+      --done: #ab7df8; --done-subtle: #ab7df826;
+      --attention: #d29922; --attention-subtle: #bb800926;
+      --neutral-muted: #656c7633;
+      --btn-bg: #212830; --btn-hover: #262c36; --btn-border: #3d444d;
+      --underline-active: #f78166;
+      --diff-add-bg: #2ea04326; --diff-add-num: #3fb9504d; --diff-del-bg: #f851491a; --diff-del-num: #f851494d;
+      --diff-hunk-bg: #388bfd1a; --diff-hunk-num: #388bfd66;
+      --shadow-overlay: 0 0 0 1px #3d444d, 0 16px 32px #010409d9;
+      --backdrop: #010409cc;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+    background: var(--canvas); color: var(--fg); min-height: 100vh;
+  }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, .mono { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; font-size: 12px; }
+  code { background: var(--neutral-muted); padding: .1em .4em; border-radius: 6px; }
+  .hidden { display: none !important; }
+  .octicon { width: 16px; height: 16px; fill: currentColor; flex: none; vertical-align: text-bottom; }
+  .c-open { color: var(--success); } .c-merged { color: var(--done); } .c-closed { color: var(--danger); }
+  .c-draft, .c-muted { color: var(--fg-muted); } .c-attn { color: var(--attention); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+  .mock-banner {
+    background: var(--attention-subtle); color: var(--attention); text-align: center;
+    font-size: 12px; padding: 4px 16px; font-weight: 600; border-bottom: 1px solid var(--border);
+  }
+
+  /* Buttons */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    min-height: 32px; padding: 0 12px; border-radius: 6px; cursor: pointer;
+    font-size: 14px; font-weight: 500; white-space: nowrap; text-decoration: none !important;
+    background: var(--btn-bg); color: var(--fg); border: 1px solid var(--btn-border);
+    box-shadow: 0 1px 0 #1f23280a; transition: background .1s;
+  }
+  .btn:hover { background: var(--btn-hover); }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .btn-primary { background: var(--success-emphasis); color: var(--fg-onEmphasis); border-color: #1f232826; }
+  .btn-primary:hover { background: var(--success-emphasis-hover); }
+  .btn-danger { color: var(--danger); }
+  .btn-invisible { background: transparent; border-color: transparent; box-shadow: none; color: var(--fg-muted); }
+  .btn-invisible:hover { background: var(--neutral-muted); }
+  .btn-icon { width: 32px; padding: 0; }
+  .btn-lg { min-height: 40px; font-size: 15px; }
+
+  /* Labels / counters */
+  .Label {
+    display: inline-flex; align-items: center; gap: 4px; padding: 0 7px; height: 20px;
+    font-size: 12px; font-weight: 500; line-height: 18px; border-radius: 999px;
+    border: 1px solid var(--border); color: var(--fg-muted); white-space: nowrap;
+  }
+  .Label--success { color: var(--success); border-color: currentColor; }
+  .Label--danger { color: var(--danger); border-color: currentColor; }
+  .Label--done { color: var(--done); border-color: currentColor; }
+  .Label--attention { color: var(--attention); border-color: currentColor; }
+  .Counter {
+    display: inline-block; min-width: 20px; padding: 0 6px; font-size: 12px; font-weight: 500;
+    line-height: 18px; text-align: center; border-radius: 999px; background: var(--neutral-muted); color: var(--fg);
+  }
+
+  /* Forms */
+  label.fl { display: block; font-weight: 600; margin-bottom: 6px; }
+  .form-control, select.form-control {
+    width: 100%; min-height: 32px; padding: 5px 12px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--canvas); color: var(--fg);
+  }
+  .form-control:focus { outline: none; border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  select.form-control {
+    appearance: none; padding-right: 28px; cursor: pointer; background-color: var(--btn-bg);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='%23818b98'%3E%3Cpath d='m4.427 7.427 3.396 3.396a.25.25 0 0 0 .354 0l3.396-3.396A.25.25 0 0 0 11.396 7H4.604a.25.25 0 0 0-.177.427Z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 6px center; font-weight: 500;
+  }
+
+  /* Token screen */
+  .login-wrap { display: grid; place-items: center; min-height: calc(100vh - 26px); padding: 16px; background: var(--canvas-inset); }
+  .login-logo { display: grid; place-items: center; margin-bottom: 16px; color: var(--fg); }
+  .login-logo svg { width: 48px; height: 48px; }
+  .login-title { text-align: center; font-size: 24px; font-weight: 300; margin: 0 0 16px; letter-spacing: -.5px; }
+  .login {
+    width: 100%; max-width: 340px; background: var(--canvas-subtle); border: 1px solid var(--border-muted);
+    border-radius: 6px; padding: 16px;
+  }
+  .login .form-control { margin-bottom: 12px; }
+  .callout {
+    width: 100%; max-width: 340px; margin-top: 16px; padding: 16px; border: 1px solid var(--border);
+    border-radius: 6px; font-size: 13px; color: var(--fg-muted);
+  }
+  .callout p { margin: 0 0 8px; } .callout p:last-child { margin: 0; }
+
+  /* Header */
+  header.AppHeader {
+    position: sticky; top: 0; z-index: 10; background: var(--canvas-subtle);
+    border-bottom: 1px solid var(--border);
+  }
+  .hdr { display: flex; align-items: center; gap: 8px; padding: 12px 16px 8px; max-width: 1280px; margin: 0 auto; }
+  .hdr-mark {
+    width: 32px; height: 32px; border: 1px solid var(--border); border-radius: 6px;
+    display: grid; place-items: center; color: var(--fg); flex: none;
+  }
+  .crumbs { flex: 1; min-width: 0; font-size: 14px; display: flex; gap: 4px; align-items: center; overflow: hidden; white-space: nowrap; }
+  .crumbs b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+  .crumbs .sep { color: var(--fg-muted); }
+  .avatar {
+    width: 32px; height: 32px; border-radius: 50%; flex: none; display: grid; place-items: center;
+    font-size: 12px; font-weight: 600; color: #fff; box-shadow: 0 0 0 1px var(--border);
+  }
+  .avatar.sm { width: 20px; height: 20px; font-size: 9px; }
+  .hdr-nav { display: flex; gap: 8px; padding: 4px 16px 0; max-width: 1280px; margin: 0 auto; overflow-x: auto; }
+  .UnderlineNav-item {
+    display: inline-flex; align-items: center; gap: 8px; padding: 0 8px; height: 40px; border: 0;
+    background: none; cursor: pointer; color: var(--fg); position: relative; border-radius: 6px; white-space: nowrap;
+  }
+  .UnderlineNav-item:hover { background: var(--neutral-muted); }
+  .UnderlineNav-item[aria-current="page"] { font-weight: 600; }
+  .UnderlineNav-item[aria-current="page"]::after {
+    content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px;
+    background: var(--underline-active); border-radius: 6px;
+  }
+
+  /* Filters */
+  main { max-width: 1280px; margin: 0 auto; padding: 16px 16px 96px; }
+  .subnav { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+  .subnav select { flex: 1 1 150px; width: auto; }
+  .search { flex: 999 1 220px; position: relative; }
+  .search .octicon { position: absolute; left: 8px; top: 8px; color: var(--fg-muted); }
+  .search input { padding-left: 32px; }
+
+  .select-btn { justify-content: space-between; flex: 1 1 180px; min-width: 0; }
+  .select-btn .lbl { overflow: hidden; text-overflow: ellipsis; }
+  .select-btn .c-muted { font-weight: 400; }
+  .search-hint { width: 100%; font-size: 12px; color: var(--fg-muted); margin-top: -4px; }
+  .search-hint code { cursor: pointer; }
+  .search-hint code:hover { color: var(--accent); }
+  .chips { display: flex; gap: 8px; overflow-x: auto; margin: 0 0 16px; padding-bottom: 2px; scrollbar-width: none; }
+  .chip {
+    flex: none; display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px;
+    border-radius: 999px; border: 1px solid var(--border); background: var(--canvas); cursor: pointer;
+    font-size: 13px; font-weight: 500; color: var(--fg-muted);
+  }
+  .chip:hover { background: var(--canvas-subtle); color: var(--fg); }
+  .chip[aria-pressed="true"] { background: var(--accent-subtle); border-color: var(--accent); color: var(--accent); }
+
+  /* Repo picker */
+  .picker-search { position: relative; }
+  .picker-search .octicon { position: absolute; left: 8px; top: 8px; color: var(--fg-muted); }
+  .picker-search input { padding-left: 32px; }
+  .picker-list { display: grid; margin: 0 -16px; }
+  .picker-item {
+    display: grid; grid-template-columns: 16px 1fr auto; gap: 2px 10px; align-items: start; text-align: left;
+    padding: 10px 16px; border: 0; border-top: 1px solid var(--border-muted); background: none; cursor: pointer; width: 100%;
+  }
+  .picker-item:hover, .picker-item:focus-visible { background: var(--canvas-subtle); outline: none; }
+  .picker-item .tick { visibility: hidden; color: var(--fg); margin-top: 2px; }
+  .picker-item[aria-selected="true"] .tick { visibility: visible; }
+  .picker-item b { font-weight: 600; word-break: break-word; }
+  .picker-item small { grid-column: 2 / 4; color: var(--fg-muted); font-size: 12px; display: flex; flex-wrap: wrap; gap: 2px 12px; align-items: center; }
+  .lang-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 4px; vertical-align: -1px; }
+  mark { background: var(--attention-subtle); color: inherit; border-radius: 2px; }
+
+  /* PR list box */
+  .Box { border: 1px solid var(--border); border-radius: 6px; background: var(--canvas); overflow: hidden; }
+  .Box-header {
+    display: flex; align-items: center; gap: 16px; padding: 12px 16px; background: var(--canvas-subtle);
+    border-bottom: 1px solid var(--border);
+  }
+  .state-toggle {
+    display: inline-flex; align-items: center; gap: 6px; border: 0; background: none; cursor: pointer;
+    color: var(--fg-muted); padding: 2px 0;
+  }
+  .state-toggle:hover { color: var(--fg); }
+  .state-toggle.selected { color: var(--fg); font-weight: 600; }
+  .Box-header .spacer { flex: 1; }
+
+  .row {
+    display: grid; grid-template-columns: 16px 1fr; gap: 4px 10px; padding: 10px 16px;
+    border-top: 1px solid var(--border-muted);
+  }
+  .row:first-child { border-top: 0; }
+  .row:hover { background: var(--canvas-subtle); }
+  .row .octicon.state { margin-top: 3px; }
+  .row-main { min-width: 0; }
+  .row-title { font-size: 16px; font-weight: 600; color: var(--fg); word-break: break-word; }
+  .row-title:hover { color: var(--accent); text-decoration: none; }
+  .row-title-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+  .check { display: inline-flex; }
+  .row-meta { font-size: 12px; color: var(--fg-muted); margin-top: 4px; display: flex; flex-wrap: wrap; gap: 2px 8px; align-items: center; }
+  .row-meta a { color: var(--fg-muted); }
+  .branch {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--accent);
+    background: var(--accent-subtle); padding: 0 5px; border-radius: 6px; max-width: 160px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; vertical-align: bottom;
+  }
+  .row-actions { grid-column: 1 / -1; display: flex; gap: 8px; margin-top: 8px; }
+  .row-actions .btn { flex: 1 1 0; min-width: 0; min-height: 36px; padding: 0 8px; }
+  .row-actions .btn-icon { flex: 0 0 36px; width: 36px; }
+  .blankslate { padding: 48px 16px; text-align: center; color: var(--fg-muted); }
+  .blankslate h3 { color: var(--fg); margin: 8px 0 4px; font-size: 20px; }
+  .paginate { display: flex; justify-content: center; margin-top: 16px; }
+
+  /* Dialog: bottom sheet on mobile, centered on desktop */
+  .Overlay-backdrop {
+    position: fixed; inset: 0; background: var(--backdrop); z-index: 50;
+    display: flex; align-items: flex-end; justify-content: center;
+  }
+  .Overlay {
+    background: var(--overlay); width: 100%; max-width: 480px; border-radius: 12px 12px 0 0;
+    box-shadow: var(--shadow-overlay); display: flex; flex-direction: column; max-height: 92vh;
+    animation: up .18s ease-out;
+  }
+  @keyframes up { from { transform: translateY(24px); } }
+  .Overlay-header { display: flex; align-items: flex-start; gap: 8px; padding: 16px; border-bottom: 1px solid var(--border-muted); }
+  .Overlay-title { margin: 0; font-size: 14px; font-weight: 600; }
+  .Overlay-desc { margin: 2px 0 0; font-size: 12px; color: var(--fg-muted); word-break: break-word; }
+  .Overlay-body { padding: 16px; overflow: auto; display: grid; gap: 12px; }
+  .Overlay-footer {
+    display: flex; gap: 8px; justify-content: flex-end; padding: 16px;
+    padding-bottom: calc(16px + env(safe-area-inset-bottom)); border-top: 1px solid var(--border-muted);
+  }
+  .Overlay-footer .btn { flex: 1; }
+  .Overlay textarea.form-control { min-height: 96px; resize: vertical; }
+
+  .merge-box { display: flex; gap: 12px; align-items: flex-start; border: 1px solid var(--border); border-radius: 6px; padding: 12px; }
+  .merge-box .ic { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; flex: none; color: #fff; }
+  .merge-box b { display: block; }
+  .merge-box small { color: var(--fg-muted); }
+  .ic.ok { background: var(--success-emphasis); } .ic.bad { background: var(--danger); } .ic.warn { background: var(--attention); }
+  .radio-group { border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .radio { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; cursor: pointer; border-top: 1px solid var(--border-muted); }
+  .radio:first-child { border-top: 0; }
+  .radio:has(input:checked) { background: var(--accent-subtle); }
+  .radio input { margin-top: 3px; accent-color: var(--accent); }
+  .radio b { font-weight: 600; display: block; }
+  .radio small { color: var(--fg-muted); }
+
+  /* Files changed */
+  .Overlay.wide { max-width: 1012px; height: 92vh; }
+  .files-toolbar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--fg-muted); }
+  .diffstat { display: inline-flex; gap: 1px; margin-left: 4px; vertical-align: middle; }
+  .diffstat i { width: 8px; height: 8px; border-radius: 1px; background: var(--neutral-muted); display: inline-block; }
+  .diffstat i.a { background: var(--success); } .diffstat i.d { background: var(--danger); }
+  .add { color: var(--success); font-weight: 600; } .del { color: var(--danger); font-weight: 600; }
+  .file { border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .file > summary {
+    list-style: none; cursor: pointer; display: flex; gap: 8px; align-items: center;
+    padding: 8px 12px; min-height: 44px; background: var(--canvas-subtle); font-size: 12px;
+    position: sticky; top: 0;
+  }
+  .file > summary::-webkit-details-marker { display: none; }
+  .chev { transition: transform .15s; color: var(--fg-muted); }
+  .file[open] .chev { transform: rotate(90deg); }
+  .file[open] > summary { border-bottom: 1px solid var(--border); }
+  .fname {
+    flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    direction: rtl; text-align: left; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .fstat { white-space: nowrap; display: inline-flex; align-items: center; gap: 4px; }
+  .diff-wrap { overflow-x: auto; }
+  table.diff { border-collapse: collapse; width: 100%; font: 12px/20px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .diff td { padding: 0 10px; vertical-align: top; }
+  .diff td.num {
+    width: 1%; min-width: 40px; text-align: right; color: var(--fg-muted); user-select: none;
+    padding: 0 8px; opacity: .8;
+  }
+  .diff td.code { white-space: pre; }
+  .diff tr.a td.code { background: var(--diff-add-bg); } .diff tr.a td.num { background: var(--diff-add-num); }
+  .diff tr.d td.code { background: var(--diff-del-bg); } .diff tr.d td.num { background: var(--diff-del-num); }
+  .diff tr.h td { background: var(--diff-hunk-bg); color: var(--fg-muted); }
+  .diff tr.h td.num { background: var(--diff-hunk-num); }
+  .diff-note { padding: 16px; text-align: center; font-size: 13px; color: var(--fg-muted); }
+
+  /* Toasts (Primer flash style) */
+  .toasts {
+    position: fixed; left: 16px; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom));
+    z-index: 100; display: grid; gap: 8px; justify-items: center; pointer-events: none;
+  }
+  .toast {
+    display: flex; gap: 10px; align-items: center; width: 100%; max-width: 420px; padding: 12px 16px;
+    border-radius: 6px; background: var(--overlay); color: var(--fg); border: 1px solid var(--border);
+    box-shadow: var(--shadow-overlay); font-size: 14px; animation: up .18s ease-out;
+  }
+  .toast .bar { width: 4px; align-self: stretch; border-radius: 2px; background: var(--accent); }
+  .toast.ok .bar { background: var(--success-emphasis); }
+  .toast.err .bar { background: var(--danger); }
+
+  /* Desktop */
+  @media (min-width: 768px) {
+    .row { grid-template-columns: 16px 1fr auto; padding: 8px 16px; }
+    .row-actions { grid-column: 3; grid-row: 1; margin-top: 0; align-self: center; flex-wrap: nowrap; }
+    .row-actions .btn { flex: 0 0 auto; min-height: 32px; padding: 0 12px; }
+    .row-actions .btn-icon { flex: 0 0 32px; width: 32px; }
+    .row-actions { opacity: .85; } .row:hover .row-actions { opacity: 1; }
+    .subnav select { flex: 0 1 220px; }
+    .select-btn { flex: 0 1 280px; }
+    .Overlay-backdrop { align-items: center; padding: 24px; }
+    .Overlay { border-radius: 12px; }
+    .Overlay-footer .btn { flex: 0 0 auto; }
+  }
+</style>
+</head>
+<body>
+<div class="mock-banner">MOCK: sample data only, no GitHub calls</div>
+
+<!-- Token screen -->
+<section id="login" class="login-wrap">
+  <div style="width:100%;display:grid;justify-items:center">
+    <div class="login-logo"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354Z"/></svg></div>
+    <h1 class="login-title">Sign in to PR Dashboard</h1>
+    <form class="login" id="loginForm">
+      <label class="fl" for="token">Personal access token</label>
+      <input class="form-control" id="token" type="password" autocomplete="off" spellcheck="false" placeholder="ghp_… or github_pat_…">
+      <button class="btn btn-primary btn-lg" style="width:100%" type="submit">Sign in</button>
+    </form>
+    <div class="callout">
+      <p>🔒 Your token is stored only in <b>this browser's local storage</b> and sent only to <code>api.github.com</code>. There's no server and no cloud.</p>
+      <p>Required: classic <code>repo</code> + <code>read:org</code>, or fine-grained <i>Pull requests</i> (read and write) and <i>Contents</i> (read and write).</p>
+      <p><a href="#" onclick="return false">Create a token →</a></p>
+    </div>
+  </div>
+</section>
+
+<!-- Main app -->
+<section id="app" class="hidden">
+  <header class="AppHeader">
+    <div class="hdr">
+      <div class="hdr-mark"><svg class="octicon" viewBox="0 0 16 16"><path d="M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354Z"/></svg></div>
+      <div class="crumbs"><b id="crumbOrg">digibimhub</b><span class="sep">/</span><b id="crumbRepo">All repositories</b></div>
+      <button class="btn btn-invisible btn-icon" id="themeBtn" title="Theme: auto" aria-label="Toggle theme">◐</button>
+      <button class="btn btn-invisible btn-icon" id="refreshBtn" title="Refresh" aria-label="Refresh">
+        <svg class="octicon" viewBox="0 0 16 16"><path d="M1.705 8.005a.75.75 0 0 1 .834.656 5.5 5.5 0 0 0 9.592 2.97l-1.204-1.204a.25.25 0 0 1 .177-.427h3.646a.25.25 0 0 1 .25.25v3.646a.25.25 0 0 1-.427.177l-1.38-1.38A7.002 7.002 0 0 1 1.05 8.84a.75.75 0 0 1 .656-.834ZM8 2.5a5.487 5.487 0 0 0-4.131 1.869l1.204 1.204A.25.25 0 0 1 4.896 6H1.25A.25.25 0 0 1 1 5.75V2.104a.25.25 0 0 1 .427-.177l1.38 1.38A7.002 7.002 0 0 1 14.95 7.16a.75.75 0 0 1-1.49.178A5.5 5.5 0 0 0 8 2.5Z"/></svg>
+      </button>
+      <div class="avatar" id="meAvatar" title="arunkumar-r"></div>
+    </div>
+    <nav class="hdr-nav" aria-label="Sections">
+      <button class="UnderlineNav-item" aria-current="page">
+        <svg class="octicon" viewBox="0 0 16 16"><path d="M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354Z"/></svg>
+        Pull requests <span class="Counter" id="navCount">0</span>
+      </button>
+      <button class="UnderlineNav-item" id="logoutBtn">
+        <svg class="octicon" viewBox="0 0 16 16"><path d="M2 2.75C2 1.784 2.784 1 3.75 1h2.5a.75.75 0 0 1 0 1.5h-2.5a.25.25 0 0 0-.25.25v10.5c0 .138.112.25.25.25h2.5a.75.75 0 0 1 0 1.5h-2.5A1.75 1.75 0 0 1 2 13.25Zm10.44 4.5-1.97-1.97a.749.749 0 0 1 .326-1.275.749.749 0 0 1 .734.215l3.25 3.25a.75.75 0 0 1 0 1.06l-3.25 3.25a.749.749 0 0 1-1.275-.326.749.749 0 0 1 .215-.734l1.97-1.97H6.75a.75.75 0 0 1 0-1.5Z"/></svg>
+        Forget token
+      </button>
+    </nav>
+  </header>
+
+  <main>
+    <div class="subnav">
+      <select class="form-control" id="orgSel" aria-label="Organization">
+        <option>digibimhub</option>
+        <option>acme-platform</option>
+        <option>arunkumar-r (personal)</option>
+      </select>
+      <button class="btn select-btn" id="repoBtn" aria-haspopup="dialog">
+        <span class="lbl"><span class="c-muted">Repo:</span> <b id="repoBtnLabel">All repositories</b></span>
+        <svg class="octicon c-muted" viewBox="0 0 16 16"><path d="m4.427 7.427 3.396 3.396a.25.25 0 0 0 .354 0l3.396-3.396A.25.25 0 0 0 11.396 7H4.604a.25.25 0 0 0-.177.427Z"/></svg>
+      </button>
+      <div class="search">
+        <svg class="octicon" viewBox="0 0 16 16"><path d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.499 4.499 0 1 0-8.997 0A4.499 4.499 0 0 0 11.5 7Z"/></svg>
+        <input class="form-control" id="q" type="search" placeholder="Search pull requests" aria-label="Search pull requests" autocomplete="off">
+      </div>
+      <div class="search-hint">Try: <code>#412</code> <code>author:priya-dev</code> <code>repo:web-portal</code> <code>is:draft</code> <code>review:approved</code> <code>branch:auth</code></div>
+    </div>
+
+    <div class="chips" role="toolbar" aria-label="Quick filters">
+      <button class="chip" data-chip="" aria-pressed="true">All</button>
+      <button class="chip" data-chip="requested">👀 Review requested from me</button>
+      <button class="chip" data-chip="mine">Created by me</button>
+      <button class="chip" data-chip="ready">✅ Ready to merge</button>
+      <button class="chip" data-chip="pending">Needs review</button>
+      <button class="chip" data-chip="changes">Changes requested</button>
+      <button class="chip" data-chip="failing">❌ Failing checks</button>
+    </div>
+
+    <div class="Box">
+      <div class="Box-header">
+        <button class="state-toggle selected" data-tab="open"><span id="openIcon"></span><span id="openCount">0</span> Open</button>
+        <button class="state-toggle" data-tab="closed"><svg class="octicon" viewBox="0 0 16 16"><path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"/></svg><span id="closedCount">0</span> Closed</button>
+        <span class="spacer"></span>
+      </div>
+      <div id="list"></div>
+    </div>
+    <div class="paginate"><button class="btn">Load more</button></div>
+  </main>
+</section>
+
+<!-- Repo picker -->
+<div class="Overlay-backdrop hidden" id="repoSheet">
+  <div class="Overlay" role="dialog" aria-modal="true" aria-labelledby="repoTitle" style="height:min(560px,92vh)">
+    <div class="Overlay-header">
+      <div style="flex:1;min-width:0"><h2 class="Overlay-title" id="repoTitle">Select repository</h2><p class="Overlay-desc" id="repoDesc"></p></div>
+      <button class="btn btn-invisible btn-icon" data-close aria-label="Close">✕</button>
+    </div>
+    <div class="Overlay-body" style="align-content:start;padding-bottom:0">
+      <div class="picker-search">
+        <svg class="octicon" viewBox="0 0 16 16"><path d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.499 4.499 0 1 0-8.997 0A4.499 4.499 0 0 0 11.5 7Z"/></svg>
+        <input class="form-control" id="repoQ" type="search" placeholder="Filter repositories" autocomplete="off" aria-label="Filter repositories">
+      </div>
+      <div class="picker-list" id="repoList" role="listbox"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Review dialog -->
+<div class="Overlay-backdrop hidden" id="approveSheet">
+  <div class="Overlay" role="dialog" aria-modal="true" aria-labelledby="approveTitle">
+    <div class="Overlay-header">
+      <div style="flex:1;min-width:0"><h2 class="Overlay-title" id="approveTitle">Finish your review</h2><p class="Overlay-desc" id="approveSub"></p></div>
+      <button class="btn btn-invisible btn-icon" data-close aria-label="Close">✕</button>
+    </div>
+    <div class="Overlay-body">
+      <textarea class="form-control" id="approveBody" placeholder="Leave a comment (optional for approve)" aria-label="Review comment"></textarea>
+      <div class="radio-group">
+        <label class="radio"><input type="radio" name="event" value="COMMENT"><span><b>Comment</b><small>Submit general feedback without explicit approval.</small></span></label>
+        <label class="radio"><input type="radio" name="event" value="APPROVE" checked><span><b>Approve</b><small>Submit feedback and approve merging these changes.</small></span></label>
+        <label class="radio"><input type="radio" name="event" value="REQUEST_CHANGES"><span><b>Request changes</b><small>Submit feedback that must be addressed before merging.</small></span></label>
+      </div>
+    </div>
+    <div class="Overlay-footer">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn btn-primary" id="approveConfirm">Submit review</button>
+    </div>
+  </div>
+</div>
+
+<!-- Merge dialog -->
+<div class="Overlay-backdrop hidden" id="mergeSheet">
+  <div class="Overlay" role="dialog" aria-modal="true" aria-labelledby="mergeTitle">
+    <div class="Overlay-header">
+      <div style="flex:1;min-width:0"><h2 class="Overlay-title" id="mergeTitle">Merge pull request</h2><p class="Overlay-desc" id="mergeSub"></p></div>
+      <button class="btn btn-invisible btn-icon" data-close aria-label="Close">✕</button>
+    </div>
+    <div class="Overlay-body">
+      <div class="merge-box" id="mergeStatus"></div>
+      <div class="radio-group">
+        <label class="radio"><input type="radio" name="method" value="squash" checked><span><b>Squash and merge</b><small>The commits from this branch will be combined into one commit in the base branch.</small></span></label>
+        <label class="radio"><input type="radio" name="method" value="merge"><span><b>Create a merge commit</b><small>All commits from this branch will be added to the base branch via a merge commit.</small></span></label>
+        <label class="radio"><input type="radio" name="method" value="rebase"><span><b>Rebase and merge</b><small>The commits from this branch will be rebased and added to the base branch.</small></span></label>
+      </div>
+    </div>
+    <div class="Overlay-footer">
+      <button class="btn" data-close>Cancel</button>
+      <button class="btn btn-primary" id="mergeConfirm">Confirm merge</button>
+    </div>
+  </div>
+</div>
+
+<!-- Files changed dialog -->
+<div class="Overlay-backdrop hidden" id="filesSheet">
+  <div class="Overlay wide" role="dialog" aria-modal="true" aria-labelledby="filesTitle">
+    <div class="Overlay-header">
+      <div style="flex:1;min-width:0"><h2 class="Overlay-title" id="filesTitle">Files changed</h2><p class="Overlay-desc" id="filesSub"></p></div>
+      <button class="btn btn-invisible btn-icon" data-close aria-label="Close">✕</button>
+    </div>
+    <div class="Overlay-body" style="align-content:start">
+      <div class="files-toolbar" id="filesSummary"></div>
+      <div id="filesList" style="display:grid;gap:12px"></div>
+    </div>
+  </div>
+</div>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<script>
+  const ME = 'arunkumar-r';
+  const P = {
+    open: 'M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354Z',
+    draft: 'M3.25 1A2.25 2.25 0 0 1 4 5.372v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.251 2.251 0 0 1 3.25 1Zm9.5 14a2.25 2.25 0 1 1 0-4.5 2.25 2.25 0 0 1 0 4.5ZM14 7.5a1.25 1.25 0 1 1-2.5 0 1.25 1.25 0 0 1 2.5 0Zm0-4.25a1.25 1.25 0 1 1-2.5 0 1.25 1.25 0 0 1 2.5 0Z',
+    merged: 'M5.45 5.154A4.25 4.25 0 0 0 9.25 7.5h1.378a2.251 2.251 0 1 1 0 1.5H9.25A5.734 5.734 0 0 1 5 7.123v3.505a2.25 2.25 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.95-.218ZM4.25 13.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Zm8.5-4.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5ZM5 3.25a.75.75 0 1 0 0 .005V3.25Z',
+    closed: 'M3.25 1A2.25 2.25 0 0 1 4 5.372v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.251 2.251 0 0 1 3.25 1Zm9.5 5.5a.75.75 0 0 1 .75.75v3.378a2.251 2.251 0 1 1-1.5 0V7.25a.75.75 0 0 1 .75-.75Zm-2.03-5.273a.75.75 0 0 1 1.06 0l.97.97.97-.97a.748.748 0 0 1 1.265.332.75.75 0 0 1-.205.729l-.97.97.97.97a.751.751 0 0 1-.018 1.042.751.751 0 0 1-1.042.018l-.97-.97-.97.97a.749.749 0 0 1-1.275-.326.749.749 0 0 1 .215-.734l.97-.97-.97-.97a.75.75 0 0 1 0-1.06Z',
+    check: 'M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z',
+    x: 'M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.749.749 0 0 1 1.275.326.749.749 0 0 1-.215.734L9.06 8l3.22 3.22a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215L8 9.06l-3.22 3.22a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z',
+    dot: 'M8 4a4 4 0 1 1 0 8 4 4 0 0 1 0-8Z',
+    alert: 'M6.457 1.047c.659-1.234 2.427-1.234 3.086 0l6.082 11.378A1.75 1.75 0 0 1 14.082 15H1.918a1.75 1.75 0 0 1-1.543-2.575Zm1.763.707a.25.25 0 0 0-.44 0L1.698 13.132a.25.25 0 0 0 .22.368h12.164a.25.25 0 0 0 .22-.368Zm.53 3.996v2.5a.75.75 0 0 1-1.5 0v-2.5a.75.75 0 0 1 1.5 0ZM9 11a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z',
+    diff: 'M8.75 1.75V5H12a.75.75 0 0 1 0 1.5H8.75v3.25a.75.75 0 0 1-1.5 0V6.5H4A.75.75 0 0 1 4 5h3.25V1.75a.75.75 0 0 1 1.5 0ZM4 13h8a.75.75 0 0 1 0 1.5H4A.75.75 0 0 1 4 13Z',
+    ext: 'M3.75 2h3.5a.75.75 0 0 1 0 1.5h-3.5a.25.25 0 0 0-.25.25v8.5c0 .138.112.25.25.25h8.5a.25.25 0 0 0 .25-.25v-3.5a.75.75 0 0 1 1.5 0v3.5A1.75 1.75 0 0 1 12.25 14h-8.5A1.75 1.75 0 0 1 2 12.25v-8.5C2 2.784 2.784 2 3.75 2Zm6.854-1h4.146a.25.25 0 0 1 .25.25v4.146a.25.25 0 0 1-.427.177L13.03 4.03 9.28 7.78a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042l3.75-3.75-1.543-1.543A.25.25 0 0 1 10.604 1Z',
+    chev: 'M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z',
+  };
+  const icon = (name, cls = '') => `<svg class="octicon ${cls}" viewBox="0 0 16 16" aria-hidden="true"><path d="${P[name]}"/></svg>`;
+
+  const AV_COLORS = ['#bf3989', '#0969da', '#1a7f37', '#9a6700', '#8250df', '#cf222e', '#1b7c83', '#bc4c00'];
+  function avatar(login, cls = '') {
+    let h = 0; for (const c of login) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+    const initials = login.replace(/\[bot\]$/, '').split(/[-_]/).map(s => s[0]).join('').slice(0, 2).toUpperCase();
+    return `<span class="avatar ${cls}" style="background:${AV_COLORS[h % AV_COLORS.length]}" title="${esc(login)}">${esc(initials)}</span>`;
+  }
+
+  // Mock shape mirrors GET /orgs/{org}/repos
+  const LANG = { TypeScript: '#3178c6', JavaScript: '#f1e05a', HCL: '#844fba', Python: '#3572A5', 'C#': '#178600', Go: '#00ADD8' };
+  const REPOS = [
+    { name: 'web-portal', description: 'Customer-facing web portal (React)', language: 'TypeScript', private: true, updated: '2 hours ago' },
+    { name: 'api-gateway', description: 'Edge API gateway and rate limiting', language: 'Go', private: true, updated: '5 hours ago' },
+    { name: 'bim-viewer', description: 'Browser IFC/BIM model viewer', language: 'TypeScript', private: false, updated: 'yesterday' },
+    { name: 'infra', description: 'Terraform for all environments', language: 'HCL', private: true, updated: '3 days ago' },
+    { name: 'revit-addins', description: 'Revit add-ins and automation scripts', language: 'C#', private: true, updated: 'last week' },
+    { name: 'data-pipeline', description: 'Model ingest and clash-report ETL', language: 'Python', private: true, updated: '2 weeks ago' },
+    { name: 'design-tokens', description: 'Shared UI tokens', language: 'JavaScript', private: false, updated: 'last month' },
+    { name: 'docs', description: 'Public product documentation', language: 'JavaScript', private: false, updated: 'last month' },
+  ];
+
+  let prs = [
+    { repo: 'web-portal', n: 412, title: 'Add dark mode toggle to settings page', author: 'priya-dev', age: '2 hours ago', state: 'open', review: 'pending', checks: 'pass', base: 'main', head: 'feat/dark-mode', comments: 3, requested: [ME] },
+    { repo: 'api-gateway', n: 128, title: 'Fix rate limiter leaking connections under load', author: 'sam-ops', age: '5 hours ago', state: 'open', review: 'approved', checks: 'pass', base: 'main', head: 'fix/rate-limit', comments: 1, requested: [ME] },
+    { repo: 'bim-viewer', n: 77, title: 'IFC loader: support property sets with nested quantities', author: ME, age: 'yesterday', state: 'open', review: 'pending', checks: 'running', base: 'develop', head: 'ifc-psets', comments: 0 },
+    { repo: 'web-portal', n: 409, title: 'Migrate auth flow to new session API', author: 'li-wei', age: '2 days ago', state: 'open', review: 'changes', checks: 'fail', conflict: true, base: 'main', head: 'auth-v2', comments: 7 },
+    { repo: 'infra', n: 33, title: 'WIP: Terraform module for staging cluster', author: 'sam-ops', age: '3 days ago', state: 'open', draft: true, review: 'pending', checks: 'none', base: 'main', head: 'tf-staging', comments: 0 },
+    { repo: 'api-gateway', n: 125, title: 'Bump express from 4.19.2 to 4.21.0', author: 'dependabot[bot]', age: '4 days ago', state: 'merged', review: 'approved', checks: 'pass', base: 'main', head: 'dependabot/npm/express-4.21.0' },
+    { repo: 'web-portal', n: 401, title: 'Experiment: replace chart library', author: 'priya-dev', age: 'last week', state: 'closed', review: 'pending', checks: 'pass', base: 'main', head: 'exp/charts' },
+    { repo: 'bim-viewer', n: 74, title: 'Speed up clash detection with spatial index', author: ME, age: 'last week', state: 'merged', review: 'approved', checks: 'pass', base: 'develop', head: 'perf/bvh' },
+  ];
+
+  // Mock shape mirrors GET /repos/{o}/{r}/pulls/{n}/files
+  const SAMPLE_FILES = [
+    { filename: 'src/components/settings/ThemeToggle.tsx', status: 'added', additions: 13, deletions: 0,
+      patch: [
+        '@@ -0,0 +1,13 @@',
+        "+import { useTheme } from '../../hooks/useTheme';",
+        '+',
+        '+export function ThemeToggle() {',
+        '+  const { theme, setTheme } = useTheme();',
+        '+  return (',
+        '+    <button',
+        '+      aria-label="Toggle dark mode"',
+        "+      onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}",
+        '+    >',
+        "+      {theme === 'dark' ? '☀️' : '🌙'}",
+        '+    </button>',
+        '+  );',
+        '+}',
+      ].join('\n') },
+    { filename: 'src/pages/Settings.tsx', status: 'modified', additions: 3, deletions: 1,
+      patch: [
+        '@@ -1,7 +1,9 @@',
+        " import { Page } from '../layout/Page';",
+        "+import { ThemeToggle } from '../components/settings/ThemeToggle';",
+        ' ',
+        ' export default function Settings() {',
+        '   return (',
+        '     <Page title="Settings">',
+        '-      <p>Nothing here yet.</p>',
+        '+      <h2>Appearance</h2>',
+        '+      <ThemeToggle />',
+        '     </Page>',
+        '   );',
+      ].join('\n') },
+    { filename: 'src/styles/legacy-theme.css', status: 'removed', additions: 0, deletions: 4,
+      patch: ['@@ -1,4 +0,0 @@', '-body {', '-  background: #fff;', '-  color: #222;', '-}'].join('\n') },
+    { filename: 'public/icons/moon.png', status: 'added', additions: 0, deletions: 0 },
+  ];
+
+  let tab = 'open';
+  let current = null;
+  let selectedRepo = '';
+  let chip = '';
+
+  // GitHub-like search: free text + qualifiers (author:, repo:, branch:, is:, review:, #123)
+  function parseQuery(q) {
+    const f = { text: [] };
+    for (const tok of q.trim().toLowerCase().split(/\s+/).filter(Boolean)) {
+      let m;
+      if ((m = tok.match(/^#(\d+)$/))) f.number = +m[1];
+      else if ((m = tok.match(/^(author|repo|branch|is|review):(.+)$/))) f[m[1]] = m[2];
+      else f.text.push(tok);
+    }
+    return f;
+  }
+  function matchesQuery(p, f) {
+    if (f.number && p.n !== f.number) return false;
+    if (f.author && !p.author.toLowerCase().includes(f.author)) return false;
+    if (f.repo && !p.repo.toLowerCase().includes(f.repo)) return false;
+    if (f.branch && !(p.head + ' ' + p.base).toLowerCase().includes(f.branch)) return false;
+    if (f.is === 'draft' && !p.draft) return false;
+    if (f.is === 'merged' && p.state !== 'merged') return false;
+    if (f.is === 'conflict' && !p.conflict) return false;
+    if (f.review && !({ approved: 'approved', changes: 'changes', 'changes_requested': 'changes', required: 'pending', none: 'pending' }[f.review] === p.review)) return false;
+    const hay = `${p.title} ${p.author} ${p.repo} ${p.head}`.toLowerCase();
+    return f.text.every(t => hay.includes(t));
+  }
+  function matchesChip(p) {
+    switch (chip) {
+      case 'requested': return (p.requested || []).includes(ME);
+      case 'mine': return p.author === ME;
+      case 'ready': return p.state === 'open' && !p.draft && !p.conflict && p.review === 'approved' && p.checks === 'pass';
+      case 'pending': return p.review === 'pending' && !p.draft;
+      case 'changes': return p.review === 'changes';
+      case 'failing': return p.checks === 'fail';
+      default: return true;
+    }
+  }
+  const $ = (s) => document.querySelector(s);
+
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  function stateIcon(p) {
+    if (p.state === 'open') return p.draft ? icon('draft', 'state c-draft') : icon('open', 'state c-open');
+    return icon(p.state, 'state c-' + p.state);
+  }
+  function checksIcon(c) {
+    return { pass: `<span class="check c-open" title="All checks have passed">${icon('check')}</span>`,
+             fail: `<span class="check c-closed" title="Some checks were not successful">${icon('x')}</span>`,
+             running: `<span class="check c-attn" title="Checks in progress">${icon('dot')}</span>`,
+             none: '' }[c] || '';
+  }
+  function reviewLabel(p) {
+    if (p.state !== 'open') return '';
+    if (p.draft) return '<span class="Label">Draft</span>';
+    return { approved: '<span class="Label Label--success">Approved</span>',
+             changes: '<span class="Label Label--danger">Changes requested</span>',
+             pending: '<span class="Label">Review required</span>' }[p.review];
+  }
+
+  function render() {
+    const repo = selectedRepo;
+    const f = parseQuery($('#q').value);
+    const visible = prs.filter(p => (!repo || p.repo === repo) && matchesQuery(p, f) && matchesChip(p));
+    const open = visible.filter(p => p.state === 'open');
+    const closed = visible.filter(p => p.state !== 'open');
+    $('#openCount').textContent = open.length;
+    $('#closedCount').textContent = closed.length;
+    $('#navCount').textContent = prs.filter(p => p.state === 'open').length;
+    $('#crumbOrg').textContent = $('#orgSel').value.replace(' (personal)', '');
+    $('#crumbRepo').textContent = repo || 'All repositories';
+    const items = tab === 'open' ? open : closed;
+
+    $('#list').innerHTML = items.length ? items.map((p) => {
+      const i = prs.indexOf(p);
+      const verb = p.state === 'merged' ? 'merged' : p.state === 'closed' ? 'closed' : 'opened';
+      const actions = p.state === 'open' ? `
+          <button class="btn" data-files="${i}">${icon('diff')} Files</button>
+          <button class="btn" data-approve="${i}">${icon('check', 'c-open')} Approve</button>
+          <button class="btn btn-primary" data-merge="${i}" ${p.draft ? 'disabled title="Draft pull requests cannot be merged"' : ''}>${icon('merged')} Merge</button>`
+        : `<button class="btn" data-files="${i}">${icon('diff')} Files</button>`;
+      return `
+        <div class="row">
+          ${stateIcon(p)}
+          <div class="row-main">
+            <div class="row-title-line">
+              <a class="row-title" href="#" onclick="return false">${esc(p.title)}</a>
+              ${p.state === 'open' ? checksIcon(p.checks) : ''}
+              ${reviewLabel(p)}
+              ${p.conflict ? `<span class="Label Label--attention">${icon('alert')} Conflicts</span>` : ''}
+              ${p.state === 'open' && (p.requested || []).includes(ME) ? '<span class="Label Label--done">Your review requested</span>' : ''}
+            </div>
+            <div class="row-meta">
+              <span><a href="#" onclick="return false"><b>${esc(p.repo)}</b></a> #${p.n} ${verb} ${esc(p.age)} by <a href="#" onclick="return false">${esc(p.author)}</a></span>
+              <span><span class="branch" title="${esc(p.head)}">${esc(p.head)}</span> → <span class="branch">${esc(p.base)}</span></span>
+              ${p.comments ? `<span>💬 ${p.comments}</span>` : ''}
+            </div>
+          </div>
+          <div class="row-actions">
+            ${actions}
+            <a class="btn btn-icon" href="#" onclick="return false" title="Open on GitHub" aria-label="Open on GitHub">${icon('ext')}</a>
+          </div>
+        </div>`;
+    }).join('') : `
+      <div class="blankslate">
+        ${icon(tab === 'open' ? 'open' : 'check')}
+        <h3>No ${tab} pull requests</h3>
+        <p>Nothing matches the current filters.</p>
+      </div>`;
+  }
+
+  function toast(msg, kind = '') {
+    const t = document.createElement('div');
+    t.className = 'toast ' + kind;
+    t.innerHTML = '<span class="bar"></span><span></span>';
+    t.lastChild.textContent = msg;
+    $('#toasts').appendChild(t);
+    setTimeout(() => t.remove(), 3500);
+  }
+
+  function openSheet(id) { $(id).classList.remove('hidden'); }
+  function closeSheets() { document.querySelectorAll('.Overlay-backdrop').forEach(s => s.classList.add('hidden')); }
+
+  // Diff rendering with old/new line numbers, GitHub style
+  function renderPatch(patch) {
+    let o = 0, n = 0;
+    return patch.split('\n').map(line => {
+      const h = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+      if (h) { o = +h[1]; n = +h[2]; return `<tr class="h"><td class="num"></td><td class="num"></td><td class="code">${esc(line)}</td></tr>`; }
+      const t = line[0];
+      let cls = '', on = '', nn = '';
+      if (t === '+') { cls = 'a'; nn = n++; }
+      else if (t === '-') { cls = 'd'; on = o++; }
+      else { on = o++; nn = n++; }
+      return `<tr class="${cls}"><td class="num">${on}</td><td class="num">${nn}</td><td class="code">${esc(line) || ' '}</td></tr>`;
+    }).join('');
+  }
+  function diffstat(a, d) {
+    const total = a + d;
+    const ga = total ? Math.round(a / total * 5) : 0;
+    const gd = total ? Math.min(5 - ga, Math.round(d / total * 5)) : 0;
+    return '<span class="diffstat">' + Array.from({ length: 5 }, (_, k) =>
+      `<i class="${k < ga ? 'a' : k < ga + gd ? 'd' : ''}"></i>`).join('') + '</span>';
+  }
+
+  function showFiles(pr, files) {
+    const adds = files.reduce((s, f) => s + f.additions, 0);
+    const dels = files.reduce((s, f) => s + f.deletions, 0);
+    const statusLabel = { added: 'Label--success', removed: 'Label--danger', modified: 'Label--attention', renamed: 'Label--done' };
+    $('#filesSub').textContent = `${pr.repo}#${pr.n} · ${pr.head} → ${pr.base}`;
+    $('#filesSummary').innerHTML =
+      `<span>Showing <b>${files.length} changed files</b> with <span class="add">${adds} additions</span> and <span class="del">${dels} deletions</span></span>${diffstat(adds, dels)}`;
+    $('#filesList').innerHTML = files.map((f, i) => `
+      <details class="file" ${i < 2 ? 'open' : ''}>
+        <summary>
+          ${icon('chev', 'chev')}
+          <span class="fname" title="${esc(f.filename)}">&lrm;${esc(f.filename)}</span>
+          <span class="Label ${statusLabel[f.status] || ''}">${esc(f.status)}</span>
+          <span class="fstat mono"><span class="add">+${f.additions}</span><span class="del">−${f.deletions}</span>${diffstat(f.additions, f.deletions)}</span>
+        </summary>
+        ${f.patch
+          ? `<div class="diff-wrap"><table class="diff">${renderPatch(f.patch)}</table></div>`
+          : `<div class="diff-note">Binary file not shown. <a href="#" onclick="return false">View on GitHub</a></div>`}
+      </details>`).join('');
+    openSheet('#filesSheet');
+  }
+
+  function showMerge(pr) {
+    $('#mergeSub').textContent = `${pr.repo}#${pr.n} · ${pr.head} → ${pr.base}`;
+    let cls = 'ok', ic = 'check', title = 'This branch has no conflicts with the base branch', sub = 'Merging can be performed automatically.';
+    if (pr.conflict) { cls = 'bad'; ic = 'x'; title = 'This branch has conflicts that must be resolved'; sub = 'Resolve conflicts on GitHub before merging.'; }
+    else if (pr.checks === 'fail') { cls = 'warn'; ic = 'alert'; title = 'Some checks were not successful'; sub = 'Branch protection may block this merge.'; }
+    else if (pr.checks === 'running') { cls = 'warn'; ic = 'dot'; title = 'Some checks haven’t completed yet'; sub = 'You can still try to merge.'; }
+    $('#mergeStatus').innerHTML = `<span class="ic ${cls}">${icon(ic)}</span><span><b>${title}</b><small>${sub}</small></span>`;
+    $('#mergeConfirm').disabled = !!pr.conflict;
+    openSheet('#mergeSheet');
+  }
+
+  // Theme: auto → light → dark
+  const THEMES = ['auto', 'light', 'dark'];
+  function applyTheme(t) {
+    if (t === 'auto') document.documentElement.removeAttribute('data-theme');
+    else document.documentElement.setAttribute('data-theme', t);
+    $('#themeBtn').textContent = { auto: '◐', light: '☀', dark: '☾' }[t];
+    $('#themeBtn').title = 'Theme: ' + t;
+    try { localStorage.setItem('gh_pr_theme', t); } catch {}
+  }
+  let theme = 'auto';
+  try { theme = localStorage.getItem('gh_pr_theme') || 'auto'; } catch {}
+  applyTheme(theme);
+  $('#themeBtn').addEventListener('click', () => {
+    theme = THEMES[(THEMES.indexOf(theme) + 1) % 3];
+    applyTheme(theme);
+  });
+
+  $('#openIcon').innerHTML = icon('open');
+  $('#meAvatar').outerHTML = avatar(ME);
+
+  $('#loginForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    $('#login').classList.add('hidden');
+    $('#app').classList.remove('hidden');
+    render();
+    toast('Signed in as ' + ME + ' (mock)', 'ok');
+  });
+  $('#logoutBtn').addEventListener('click', () => {
+    $('#app').classList.add('hidden');
+    $('#login').classList.remove('hidden');
+    $('#token').value = '';
+    toast('Token removed from this browser');
+  });
+  $('#refreshBtn').addEventListener('click', () => { render(); toast('Refreshed'); });
+  $('#orgSel').addEventListener('change', render);
+  $('#q').addEventListener('input', render);
+  document.querySelectorAll('.search-hint code').forEach(c => c.addEventListener('click', () => {
+    const q = $('#q');
+    q.value = (q.value.trim() + ' ' + c.textContent).trim();
+    q.focus(); render();
+  }));
+  document.querySelectorAll('.chip').forEach(b => b.addEventListener('click', () => {
+    chip = b.dataset.chip;
+    document.querySelectorAll('.chip').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+    render();
+  }));
+
+  // Repo picker
+  function highlight(text, q) {
+    if (!q) return esc(text);
+    const i = text.toLowerCase().indexOf(q);
+    if (i < 0) return esc(text);
+    return esc(text.slice(0, i)) + '<mark>' + esc(text.slice(i, i + q.length)) + '</mark>' + esc(text.slice(i + q.length));
+  }
+  function renderRepoList() {
+    const q = $('#repoQ').value.trim().toLowerCase();
+    const openCount = (name) => prs.filter(p => p.state === 'open' && (!name || p.repo === name)).length;
+    const list = REPOS.filter(r => !q || r.name.toLowerCase().includes(q) || (r.description || '').toLowerCase().includes(q));
+    const items = [];
+    if (!q) items.push(`
+      <button class="picker-item" role="option" data-repo="" aria-selected="${selectedRepo === ''}">
+        ${icon('check', 'tick')}<b>All repositories</b><span class="Counter">${openCount('')}</span>
+        <small>Pull requests across the whole organization</small>
+      </button>`);
+    for (const r of list) items.push(`
+      <button class="picker-item" role="option" data-repo="${esc(r.name)}" aria-selected="${selectedRepo === r.name}">
+        ${icon('check', 'tick')}<b>${highlight(r.name, q)}</b><span class="Counter">${openCount(r.name)}</span>
+        <small>
+          ${r.description ? `<span>${highlight(r.description, q)}</span>` : ''}
+          <span><span class="lang-dot" style="background:${LANG[r.language] || '#8b949e'}"></span>${esc(r.language)}</span>
+          <span class="Label" style="height:18px">${r.private ? 'Private' : 'Public'}</span>
+          <span>Updated ${esc(r.updated)}</span>
+        </small>
+      </button>`);
+    $('#repoList').innerHTML = items.join('') || '<div class="blankslate" style="padding:24px">No repositories match.</div>';
+  }
+  $('#repoBtn').addEventListener('click', () => {
+    $('#repoQ').value = '';
+    $('#repoDesc').textContent = `${REPOS.length} repositories in ${$('#orgSel').value.replace(' (personal)', '')}`;
+    renderRepoList();
+    openSheet('#repoSheet');
+    setTimeout(() => $('#repoQ').focus(), 50);
+  });
+  $('#repoQ').addEventListener('input', renderRepoList);
+  $('#repoQ').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { const first = $('#repoList .picker-item'); if (first) first.click(); }
+  });
+  $('#repoList').addEventListener('click', (e) => {
+    const item = e.target.closest('[data-repo]');
+    if (!item) return;
+    selectedRepo = item.dataset.repo;
+    $('#repoBtnLabel').textContent = selectedRepo || 'All repositories';
+    closeSheets(); render();
+  });
+  document.querySelectorAll('.state-toggle').forEach(b => b.addEventListener('click', () => {
+    document.querySelectorAll('.state-toggle').forEach(x => x.classList.toggle('selected', x === b));
+    tab = b.dataset.tab; render();
+  }));
+
+  $('#list').addEventListener('click', (e) => {
+    const f = e.target.closest('[data-files]');
+    const a = e.target.closest('[data-approve]');
+    const m = e.target.closest('[data-merge]');
+    if (f) {
+      current = prs[+f.dataset.files];
+      showFiles(current, SAMPLE_FILES);
+    } else if (a) {
+      current = prs[+a.dataset.approve];
+      $('#approveSub').textContent = `${current.repo}#${current.n} · ${current.title}`;
+      $('#approveBody').value = '';
+      document.querySelector('input[name=event][value=APPROVE]').checked = true;
+      openSheet('#approveSheet');
+    } else if (m) {
+      current = prs[+m.dataset.merge];
+      showMerge(current);
+    }
+  });
+
+  document.querySelectorAll('.Overlay-backdrop').forEach(bd => bd.addEventListener('click', (e) => {
+    if (e.target === bd || e.target.closest('[data-close]')) closeSheets();
+  }));
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSheets(); });
+
+  $('#approveConfirm').addEventListener('click', () => {
+    const event = document.querySelector('input[name=event]:checked').value;
+    const body = $('#approveBody').value.trim();
+    if (event !== 'APPROVE' && !body) return toast('A comment is required for this review type', 'err');
+    closeSheets();
+    if (current.author === ME && event !== 'COMMENT') return toast('Can not approve or request changes on your own pull request', 'err');
+    if (event === 'APPROVE') current.review = 'approved';
+    if (event === 'REQUEST_CHANGES') current.review = 'changes';
+    current.requested = (current.requested || []).filter(u => u !== ME);
+    render();
+    toast({ APPROVE: 'Approved', REQUEST_CHANGES: 'Requested changes on', COMMENT: 'Commented on' }[event] + ` ${current.repo}#${current.n}`, 'ok');
+  });
+  // Mock-only shortcuts: #demo, #demo-files, #demo-repos, #demo-review, #demo-merge
+  if (location.hash.startsWith('#demo')) {
+    $('#login').classList.add('hidden'); $('#app').classList.remove('hidden'); render();
+    const which = location.hash.slice(6);
+    if (which === 'files') $('[data-files]').click();
+    if (which === 'repos') $('#repoBtn').click();
+    if (which === 'review') $('[data-approve]').click();
+    if (which === 'merge') $('[data-merge]').click();
+  }
+
+  $('#mergeConfirm').addEventListener('click', () => {
+    const method = document.querySelector('input[name=method]:checked').value;
+    closeSheets();
+    current.state = 'merged'; render();
+    toast(`Merged ${current.repo}#${current.n} (${method})`, 'ok');
+  });
+</script>
+</body>
+</html>
