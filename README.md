@@ -36,7 +36,7 @@ Other static hosts work the same way: upload the `dist/` folder to Cloudflare Pa
 ## Install as an app
 
 The site is an installable web app (PWA): `public/manifest.webmanifest`, icons in `public/icons/`, and a service worker `public/sw.js`.
-- **Android / desktop Chrome or Edge:** tap the **Install** button in the header, or use the browser menu → *Install app*.
+- **Android / desktop Chrome or Edge:** use the browser's own install prompt or menu → *Install app*.
 - **iPhone / iPad (Safari):** Share → *Add to Home Screen*.
 
 It opens full-screen with its own icon. The service worker caches only the app's own files, so it opens instantly and even offline. It never caches GitHub API calls or the token. A new deploy is picked up on the next launch, because pages load network-first.
@@ -48,7 +48,12 @@ Installing needs **HTTPS**, so use the GitHub Pages URL. A plain `http://192.168
 | Token type | Needs |
 |---|---|
 | **Classic** (simplest) | `repo`, `read:org` |
-| **Fine-grained** | Resource owner = the org. Repository access = the repos you want. Permissions: **Pull requests** (read and write), **Contents** (read and write, needed to merge), **Commit statuses** (read), **Metadata** (read) |
+| **Fine-grained** | Resource owner = the org. Repository access = the repos you want. Permissions: **Pull requests** (read and write), **Contents** (read and write, needed to merge), **Commit statuses** (read), **Actions** (read), **Metadata** (read) |
+
+Notes for fine-grained tokens:
+- They can't list your organizations. The app works out the orgs from the repositories the token can reach, or you can type an org name in the org picker.
+- Many orgs require an owner to **approve** fine-grained tokens (Organization → Settings → Personal access tokens → Pending requests). Until then the token reaches nothing in that org.
+- If anything is missing, use **Check token access**. It's offered on the error box and on empty lists, tests each request the app needs, and has **Copy report** to share the result. The report never contains the token.
 
 If your org enforces SAML SSO, authorize the token for the org (GitHub → Settings → Developer settings → Tokens → *Configure SSO*). The app shows an SSO hint when GitHub rejects a request for that reason.
 

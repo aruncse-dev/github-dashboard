@@ -3,8 +3,10 @@
 import { storage } from './api';
 import type { Repo, Viewer } from './queries';
 
-const KEY = 'gh_pr_cache_v2';
-storage.remove('gh_pr_cache_v1'); // older format held full repo lists
+const KEY = 'gh_pr_cache_v3';
+// v1 held full repo lists; v2 could hold an empty org list from fine-grained tokens.
+storage.remove('gh_pr_cache_v1');
+storage.remove('gh_pr_cache_v2');
 
 interface Entry<T> {
   data: T;

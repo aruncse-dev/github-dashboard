@@ -1,4 +1,4 @@
-import { graphql } from './api';
+import { graphql, rest, type RestRepo } from './api';
 
 // ---------- Types (only the fields we query) ----------
 
@@ -116,10 +116,40 @@ const PR_FIELDS = `
 
 export const PAGE_SIZE = 10;
 
-export async function fetchViewer(): Promise<Viewer> {
-  const data = await graphql<{ viewer: Viewer }>(`
-    query { viewer { login avatarUrl(size: 64) organizations(first: 100) { nodes { login avatarUrl(size: 40) } } } }`);
-  return data.viewer;
+/** Repos the token can reach (REST). Shared by the org and repo fallbacks below. */
+let tokenReposPromise: Promise<RestRepo[]> | null = null;
+export function tokenRepos(refresh = false): Promise<RestRepo[]> {
+  if (!tokenReposPromise || refresh) {
+    tokenReposPromise = rest.userRepos().catch(() => []);
+  }
+  return tokenReposPromise;
+}
+
+/**
+ * Signed-in user plus their organizations. Fine-grained tokens often can't list orgs,
+ * so fall back to REST /user/orgs, then to the owners of repos the token can reach.
+ */
+export async function fetchViewer(refresh = false): Promise<Viewer> {
+  const base = await graphql<{ viewer: { login: string; avatarUrl: string } }>(`query { viewer { login avatarUrl(size: 64) } }`);
+  let orgs: Array<{ login: string; avatarUrl: string }> = [];
+  try {
+    const data = await graphql<{ viewer: { organizations: { nodes: Array<{ login: string; avatarUrl: string }> } } }>(
+      `query { viewer { organizations(first: 100) { nodes { login avatarUrl(size: 40) } } } }`, {}, true);
+    orgs = data.viewer.organizations.nodes.filter(Boolean);
+  } catch { /* not allowed for this token */ }
+  if (!orgs.length) {
+    try {
+      orgs = (await rest.userOrgs()).map((o) => ({ login: o.login, avatarUrl: o.avatar_url }));
+    } catch { /* not allowed for this token */ }
+  }
+  if (!orgs.length) {
+    const seen = new Map<string, string>();
+    for (const r of await tokenRepos(refresh)) {
+      if (r.owner.login.toLowerCase() !== base.viewer.login.toLowerCase()) seen.set(r.owner.login, r.owner.avatar_url);
+    }
+    orgs = [...seen].map(([login, avatarUrl]) => ({ login, avatarUrl }));
+  }
+  return { ...base.viewer, organizations: { nodes: orgs } };
 }
 
 export interface SearchResult {
@@ -281,16 +311,34 @@ const notArchived = (r: Repo | null | undefined): r is Repo => !!r && !r.isArchi
 
 /** The owner's most recently pushed repos: one fast request, used for the picker's default list. */
 export async function fetchRecentRepos(owner: string, count = 30): Promise<Repo[]> {
-  const data = await graphql<{ repositoryOwner: { repositories: { nodes: Repo[] } } | null }>(`
-    query($login: String!, $count: Int!) {
-      repositoryOwner(login: $login) {
-        repositories(first: $count, ownerAffiliations: [OWNER], orderBy: { field: PUSHED_AT, direction: DESC }) {
-          nodes { ${REPO_FIELDS} }
+  let repos: Repo[] = [];
+  try {
+    const data = await graphql<{ repositoryOwner: { repositories: { nodes: Repo[] } } | null }>(`
+      query($login: String!, $count: Int!) {
+        repositoryOwner(login: $login) {
+          repositories(first: $count, ownerAffiliations: [OWNER], orderBy: { field: PUSHED_AT, direction: DESC }) {
+            nodes { ${REPO_FIELDS} }
+          }
         }
-      }
-    }`, { login: owner, count });
-  if (!data.repositoryOwner) throw new Error(`Organization or user “${owner}” not found`);
-  return data.repositoryOwner.repositories.nodes.filter(notArchived);
+      }`, { login: owner, count }, true);
+    repos = (data.repositoryOwner?.repositories.nodes ?? []).filter(notArchived);
+  } catch { /* fall back to REST below */ }
+  if (repos.length) return repos;
+  // Fine-grained tokens: the REST list holds exactly the repos selected for the token.
+  const fromToken = (await tokenRepos())
+    .filter((r) => r.owner.login.toLowerCase() === owner.toLowerCase() && !r.archived)
+    .slice(0, count)
+    .map((r): Repo => ({
+      name: r.name,
+      owner: { login: r.owner.login },
+      description: r.description,
+      isPrivate: r.private,
+      isArchived: r.archived,
+      pushedAt: r.pushed_at,
+      primaryLanguage: r.language ? { name: r.language, color: null } : null,
+      pullRequests: { totalCount: -1 }, // unknown via this API
+    }));
+  return fromToken;
 }
 
 /** Server-side repo search within one owner (matches the repo name). */

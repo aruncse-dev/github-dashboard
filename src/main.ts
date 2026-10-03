@@ -1,9 +1,9 @@
 import {
-  GitHubError, forgetToken, getToken, rest, saveToken, setWarningHandler, storage,
+  GitHubError, forgetToken, getToken, isFineGrained, probe, rest, saveToken, setWarningHandler, storage,
   type MergeMethod, type RestFile, type RestPull, type ReviewEvent,
 } from './api';
 import {
-  checkBucket, fetchCheckRunDetail, fetchLabels, fetchMergeSettings, fetchPullRequest, fetchPullRequestDetail, fetchRecentRepos, fetchViewer, searchRepos, searchPullRequests, summarizeChecks,
+  checkBucket, fetchCheckRunDetail, fetchLabels, fetchMergeSettings, fetchPullRequest, fetchPullRequestDetail, fetchRecentRepos, fetchViewer, searchRepos, tokenRepos, searchPullRequests, summarizeChecks,
   type CheckBucket, type CheckRunDetail, type DetailCheck, type PullRequest, type PullRequestDetail, type Repo, type Viewer,
 } from './queries';
 import {
@@ -17,7 +17,8 @@ import { hasIncompleteQualifier, initSuggest, rememberSearch } from './suggest';
 
 type Tab = 'open' | 'closed';
 
-const LAST_KEY = 'gh_pr_last_v2';
+const LAST_KEY = 'gh_pr_last_v3';
+storage.remove('gh_pr_last_v2'); // may point at the personal account before org discovery improved
 const THEME_KEY = 'gh_pr_theme';
 
 const state = {
@@ -169,6 +170,12 @@ async function loadPrs(reset: boolean): Promise<void> {
 function showListError(e: unknown): void {
   const box = $('#listError');
   box.textContent = e instanceof Error ? e.message : String(e);
+  const btn = document.createElement('button');
+  btn.className = 'btn btn-sm';
+  btn.style.marginTop = '8px';
+  btn.dataset.diag = '';
+  btn.textContent = 'Check token access';
+  box.append(document.createElement('br'), btn);
   box.classList.remove('hidden');
 }
 
@@ -192,7 +199,8 @@ function renderList(): void {
   $('#list').innerHTML = state.prs.length
     ? state.prs.map(prCard).join('')
     : `<div class="blankslate">${icon(state.tab === 'open' ? 'open' : 'check')}
-         <h3>No ${state.tab} pull requests</h3><p>Nothing matches the current filters.</p></div>`;
+         <h3>No ${state.tab} pull requests</h3><p>Nothing matches the current filters.</p>
+         <button class="btn btn-sm" data-diag>Expected some? Check token access</button></div>`;
 }
 
 function stateIcon(pr: PullRequest): string {
@@ -865,7 +873,7 @@ function repoItem(r: Repo): PickItem {
     value: r.name,
     label: r.name,
     sub: r.description ?? undefined,
-    count: r.pullRequests.totalCount,
+    count: r.pullRequests.totalCount >= 0 ? r.pullRequests.totalCount : undefined,
     fav: favorites.isRepo(state.owner, r.name),
     extra:
       (r.primaryLanguage ? `<span><span class="lang-dot" style="background:${esc(r.primaryLanguage.color ?? '#8b949e')}"></span>${esc(r.primaryLanguage.name)}</span>` : '') +
@@ -1046,11 +1054,12 @@ async function syncPicker(): Promise<void> {
   btn.disabled = true;
   try {
     if (kind === 'owner') {
-      const viewer = await fetchViewer();
+      const viewer = await fetchViewer(true);
       cache.setViewer(viewer);
       state.viewer = viewer;
       $<HTMLImageElement>('#meAvatar').src = viewer.avatarUrl;
     } else {
+      await tokenRepos(true);
       const recent = await fetchRecentRepos(owner);
       cache.setRepos(owner, recent);
       remember(owner, recent);
@@ -1102,37 +1111,120 @@ function applyTheme(t: Theme): void {
   storage.set(THEME_KEY, t);
 }
 
-// ---------- Install as an app (PWA) ----------
+// ---------- Installable app (PWA) ----------
 
-interface InstallPromptEvent extends Event {
-  prompt(): Promise<void>;
-  userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
-}
-
-function initInstall(): void {
-  // The service worker only runs on built, secure (HTTPS or localhost) pages.
+/** The browser shows its own install prompt/menu item; we only register the service worker. */
+function registerServiceWorker(): void {
+  // Service workers only run on built, secure (HTTPS or localhost) pages.
   if (import.meta.env.PROD && 'serviceWorker' in navigator && window.isSecureContext) {
     addEventListener('load', () => {
       navigator.serviceWorker.register('./sw.js').catch((e) => console.warn('Service worker not registered', e));
     });
   }
-  // Chrome/Edge/Android offer an install prompt; show our Install button only then.
-  let deferred: InstallPromptEvent | null = null;
-  const btn = $<HTMLButtonElement>('#installBtn');
-  addEventListener('beforeinstallprompt', (e) => {
-    e.preventDefault();
-    deferred = e as InstallPromptEvent;
-    btn.classList.remove('hidden');
-  });
-  btn.addEventListener('click', async () => {
-    if (!deferred) return;
-    await deferred.prompt();
-    const { outcome } = await deferred.userChoice;
-    deferred = null;
-    btn.classList.add('hidden');
-    if (outcome === 'accepted') toast('Installed: open PR Dashboard from your home screen', 'ok');
-  });
-  addEventListener('appinstalled', () => btn.classList.add('hidden'));
+}
+
+// ---------- Token access check ----------
+
+interface DiagRow {
+  label: string;
+  ok: boolean | null; // null = skipped
+  detail: string;
+}
+
+let diagReport = '';
+
+function renderDiag(rows: DiagRow[], hints: string[], running: boolean): void {
+  const mark = (r: DiagRow) => (r.ok === null ? icon('skip', 'c-muted') : r.ok ? icon('check', 'c-pass') : icon('x', 'c-fail'));
+  $('#diagBody').innerHTML =
+    `<div class="d-list">${rows.map((r) => `
+      <div class="d-row">${mark(r)}<span class="d-grow"><b>${esc(r.label)}</b><small class="diag-detail">${esc(r.detail)}</small></span></div>`).join('')}
+      ${running ? spinnerHtml('Checking…') : ''}</div>` +
+    (hints.length ? `<div class="diag-hints"><b>What to fix</b><ul>${hints.map((h) => `<li>${esc(h)}</li>`).join('')}</ul></div>` : '');
+  diagReport = [
+    'PR Dashboard token check',
+    ...rows.map((r) => `${r.ok === null ? '-' : r.ok ? 'OK ' : 'ERR'} ${r.label}: ${r.detail}`),
+    ...(hints.length ? ['', 'Hints:', ...hints.map((h) => `- ${h}`)] : []),
+  ].join('\n');
+}
+
+async function runDiagnostics(): Promise<void> {
+  openDialog('#diagSheet');
+  const rows: DiagRow[] = [];
+  const hints: string[] = [];
+  const add = (row: DiagRow) => { rows.push(row); renderDiag(rows, hints, true); };
+  renderDiag(rows, hints, true);
+  const fine = isFineGrained();
+  const gql = (query: string, variables: Record<string, unknown> = {}) =>
+    probe('/graphql', { method: 'POST', body: JSON.stringify({ query, variables }) });
+
+  // 1. Who is this token?
+  const user = await probe('/user');
+  const login = (user.body as { login?: string } | null)?.login ?? '?';
+  add({ label: 'Token signs in', ok: user.ok, detail: user.ok
+    ? `as ${login} · ${fine ? 'fine-grained token' : `classic token · scopes: ${user.scopes || 'none'}`}` : user.message });
+  if (!user.ok) {
+    hints.push('The token is invalid, expired or revoked. Create a new one and sign in again.');
+    return renderDiag(rows, hints, false);
+  }
+
+  // 2. Organizations (GraphQL), as the org picker uses.
+  const orgs = await gql('query { viewer { organizations(first: 100) { nodes { login } } } }');
+  const orgNodes = (orgs.body as { data?: { viewer?: { organizations?: { nodes: Array<{ login: string }> } } } } | null)?.data?.viewer?.organizations?.nodes ?? [];
+  add({ label: 'Can list your organizations', ok: orgs.ok && orgNodes.length > 0,
+    detail: orgs.ok ? (orgNodes.length ? orgNodes.map((o) => o.login).join(', ') : 'none returned') : orgs.message });
+
+  // 3. Repositories the token can reach.
+  const repos = await probe('/user/repos?per_page=100&sort=pushed');
+  const repoList = Array.isArray(repos.body) ? (repos.body as Array<{ full_name: string }>).map((r) => r.full_name) : [];
+  add({ label: 'Repositories this token can reach', ok: repos.ok && repoList.length > 0,
+    detail: repos.ok ? (repoList.length ? `${repoList.length}: ${repoList.slice(0, 8).join(', ')}${repoList.length > 8 ? '…' : ''}` : 'none') : repos.message });
+  if (fine && !orgNodes.length && repoList.length) {
+    hints.push('Fine-grained tokens can’t list organizations; the app now finds them from the repositories above. You can also type the org name in the org picker.');
+  }
+  if (!repoList.length) {
+    hints.push(fine
+      ? 'The token reaches no repositories. If the organization requires approval for fine-grained tokens, an org owner must approve it (Organization → Settings → Personal access tokens → Pending requests). Also check “Repository access” on the token.'
+      : 'The token reaches no repositories. A classic token needs the “repo” scope (and SSO authorization for SSO organizations).');
+  }
+
+  // 4–8. The selected repository.
+  const owner = state.owner;
+  const repo = state.repo;
+  if (!owner || !repo) {
+    add({ label: 'Selected repository', ok: null, detail: 'none selected yet' });
+    return renderDiag(rows, hints, false);
+  }
+  const full = `${owner}/${repo}`;
+  const path = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+  const r = await probe(path);
+  add({ label: `Can open ${full}`, ok: r.ok, detail: r.ok ? 'OK' : r.message });
+  if (r.sso) hints.push(`SSO: authorize the token for this organization: ${r.sso}`);
+  if (!r.ok) {
+    hints.push(`${full} is not in the token’s repository access (or the token is waiting for org approval). Pick a repository listed above, or edit the token.`);
+    return renderDiag(rows, hints, false);
+  }
+
+  const pulls = await probe(`${path}/pulls?state=all&per_page=1`);
+  const firstPr = Array.isArray(pulls.body) ? (pulls.body as Array<{ number: number; head: { sha: string } }>)[0] : undefined;
+  add({ label: 'Can read pull requests', ok: pulls.ok, detail: pulls.ok ? (firstPr ? `latest #${firstPr.number}` : 'repository has no pull requests') : pulls.message });
+  if (!pulls.ok) hints.push('Give the token “Pull requests: Read and write”.');
+
+  const search = await gql('query($q: String!) { search(query: $q, type: ISSUE, first: 1) { issueCount } }', { q: `repo:${full} is:pr` });
+  const count = (search.body as { data?: { search?: { issueCount: number } } } | null)?.data?.search?.issueCount;
+  add({ label: 'Pull request search (used for the list)', ok: search.ok, detail: search.ok ? `${count} pull requests found` : search.message });
+
+  if (firstPr) {
+    const status = await probe(`${path}/commits/${firstPr.head.sha}/status`);
+    add({ label: 'Can read commit statuses', ok: status.ok, detail: status.ok ? 'OK' : status.message });
+    const runs = await probe(`${path}/commits/${firstPr.head.sha}/check-runs?per_page=1`);
+    add({ label: 'Can read check runs', ok: runs.ok, detail: runs.ok ? 'OK' : runs.message });
+    if (!status.ok || !runs.ok) hints.push('To show CI results, give the token “Commit statuses: Read” (and “Checks: Read” if your token settings offer it; “Actions: Read” covers GitHub Actions runs).');
+  } else {
+    add({ label: 'Checks / statuses', ok: null, detail: 'skipped (no pull request to test with)' });
+  }
+
+  if (fine) hints.push('To merge from the app, the token also needs “Contents: Read and write”. Apps can’t read a fine-grained token’s permissions, so this one isn’t tested.');
+  renderDiag(rows, hints, false);
 }
 
 // ---------- Wiring ----------
@@ -1291,6 +1383,19 @@ function init(): void {
     if ((e as CustomEvent<string>).detail === '#detailSheet') clearTimeout(detail.timer);
   });
 
+  document.addEventListener('click', (e) => {
+    if ((e.target as HTMLElement).closest('[data-diag]')) void runDiagnostics();
+  });
+  $('#diagRerun').addEventListener('click', () => void runDiagnostics());
+  $('#diagCopy').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(diagReport);
+      toast('Report copied', 'ok');
+    } catch {
+      toast('Couldn’t copy. Select the text and copy it manually.', 'err');
+    }
+  });
+
   $('#reviewConfirm').addEventListener('click', () => void submitReview());
   $('#mergeConfirm').addEventListener('click', () => void confirmMerge());
   $('#filesMoreBtn').addEventListener('click', () => {
@@ -1299,7 +1404,7 @@ function init(): void {
     void withBusy($<HTMLButtonElement>('#filesMoreBtn'), () => loadFilesPage(state.current!));
   });
 
-  initInstall();
+  registerServiceWorker();
 
   if (getToken()) void boot();
   else showLogin();

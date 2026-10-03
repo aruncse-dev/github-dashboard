@@ -36,7 +36,7 @@
         <div class="callout">
           <p>🔒 Your token is stored only in <b>this browser's local storage</b> and sent only to <code>api.github.com</code>. No server, no cloud.</p>
           <p><b>Classic token:</b> scopes <code>repo</code> and <code>read:org</code>.</p>
-          <p><b>Fine-grained token:</b> resource owner = your org. Repository permissions: Pull requests (read and write), Contents (read and write), Commit statuses (read), Metadata (read).</p>
+          <p><b>Fine-grained token:</b> resource owner = your org. Repository permissions: Pull requests (read and write), Contents (read and write, needed to merge), Commit statuses (read), Actions (read), Metadata (read). Some orgs must approve fine-grained tokens before they work.</p>
           <p><a href="https://github.com/settings/tokens/new?scopes=repo,read:org&amp;description=PR%20Dashboard" target="_blank" rel="noopener noreferrer">Create a classic token →</a></p>
         </div>
       </div>
@@ -48,7 +48,6 @@
         <div class="hdr">
           <div class="hdr-mark" data-logo></div>
           <div class="crumbs"><b>Pull requests</b></div>
-          <button class="btn btn-sm hidden" id="installBtn" title="Install as an app"><span data-icon="download"></span>Install</button>
           <button class="btn btn-invisible btn-icon" id="themeBtn" title="Theme: auto" aria-label="Toggle theme">◐</button>
           <button class="btn btn-invisible btn-icon" id="refreshBtn" title="Refresh" aria-label="Refresh" data-icon="sync"></button>
           <button class="btn btn-invisible btn-icon" id="logoutBtn" title="Forget token on this device" aria-label="Forget token" data-icon="signout"></button>
@@ -106,6 +105,21 @@
         </div>
         <div class="Overlay-body" id="detailBody"></div>
         <div class="Overlay-footer d-footer" id="detailFooter"></div>
+      </div>
+    </div>
+
+    <!-- Token check -->
+    <div class="Overlay-backdrop hidden" id="diagSheet">
+      <div class="Overlay" role="dialog" aria-modal="true" aria-labelledby="diagTitle" style="max-width:600px">
+        <div class="Overlay-header">
+          <div><h2 class="Overlay-title" id="diagTitle">Token access check</h2><p class="Overlay-desc">What this token can and can't reach. The token itself is never shown.</p></div>
+          <button class="btn btn-invisible btn-icon" data-close aria-label="Close" data-icon="x"></button>
+        </div>
+        <div class="Overlay-body" id="diagBody"></div>
+        <div class="Overlay-footer">
+          <button class="btn" id="diagCopy">Copy report</button>
+          <button class="btn btn-primary" id="diagRerun">Run again</button>
+        </div>
       </div>
     </div>
 

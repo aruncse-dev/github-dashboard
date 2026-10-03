@@ -53,8 +53,49 @@ async function request<T>(path: string, init: RequestInit = {}, token: string | 
   const res = await fetch(API + path, { ...init, headers, cache: 'no-store' });
   if (res.status === 204) return undefined as T;
   const body = await res.json().catch(() => null);
-  if (!res.ok) throw new GitHubError(describeError(res.status, body), res.status);
+  if (!res.ok) {
+    const sso = ssoUrl(res);
+    const msg = sso ? `This organization uses SAML SSO. Authorize the token here: ${sso}` : describeError(res.status, body);
+    throw new GitHubError(msg, res.status);
+  }
   return body as T;
+}
+
+/** GitHub sends `X-GitHub-SSO: required; url=…` when the token isn't authorized for an SSO org. */
+function ssoUrl(res: Response): string | null {
+  const h = res.headers.get('x-github-sso');
+  return h?.match(/url=([^\s;]+)/)?.[1] ?? null;
+}
+
+export const isFineGrained = (token: string | null = getToken()): boolean => !!token?.startsWith('github_pat_');
+
+export interface ProbeResult {
+  ok: boolean;
+  status: number;
+  body: unknown;
+  message: string;
+  scopes: string | null;
+  sso: string | null;
+}
+
+/** Like `request`, but never throws: used by the token check. */
+export async function probe(path: string, init: RequestInit = {}): Promise<ProbeResult> {
+  const token = getToken();
+  try {
+    const headers: Record<string, string> = { Accept: 'application/vnd.github+json', Authorization: `Bearer ${token}` };
+    if (init.body) headers['Content-Type'] = 'application/json';
+    const res = await fetch(API + path, { ...init, headers, cache: 'no-store' });
+    const body = await res.json().catch(() => null);
+    const gqlErrors = (body as { errors?: Array<{ message: string }> } | null)?.errors;
+    const ok = res.ok && !gqlErrors?.length;
+    const sso = ssoUrl(res) ?? res.headers.get('x-github-sso');
+    const message = ok ? 'OK'
+      : gqlErrors?.length ? gqlErrors.map((e) => e.message).join('; ')
+      : describeError(res.status, body as ErrorBody | null);
+    return { ok, status: res.status, body, message, scopes: res.headers.get('x-oauth-scopes'), sso };
+  } catch (e) {
+    return { ok: false, status: 0, body: null, message: (e as Error).message, scopes: null, sso: null };
+  }
 }
 
 // ---------- GraphQL ----------
@@ -69,7 +110,7 @@ interface GraphQLResponse<T> {
   errors?: Array<{ message: string; type?: string }>;
 }
 
-export async function graphql<T>(query: string, variables: Record<string, unknown> = {}): Promise<T> {
+export async function graphql<T>(query: string, variables: Record<string, unknown> = {}, quiet = false): Promise<T> {
   const res = await request<GraphQLResponse<T>>('/graphql', {
     method: 'POST',
     body: JSON.stringify({ query, variables }),
@@ -79,7 +120,7 @@ export async function graphql<T>(query: string, variables: Record<string, unknow
     throw new GitHubError(describeError(200, { message: errors.map((e) => e.message).join('; ') || 'GraphQL error' }), 200);
   }
   // Partial data (e.g. one SAML-protected org hidden from search results): still show what we got.
-  if (errors.length) onWarning(describeError(200, { message: errors[0].message }));
+  if (errors.length && !quiet) onWarning(describeError(200, { message: errors[0].message }));
   return res.data;
 }
 
@@ -118,9 +159,24 @@ export type MergeMethod = 'merge' | 'squash' | 'rebase';
 const repoPath = (owner: string, repo: string) =>
   `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
 
+export interface RestRepo {
+  name: string;
+  owner: { login: string; type: string; avatar_url: string };
+  description: string | null;
+  private: boolean;
+  archived: boolean;
+  pushed_at: string | null;
+  language: string | null;
+}
+
 export const rest = {
   /** Validates a token before it is saved. */
   user: (token: string) => request<RestUser>('/user', {}, token),
+
+  /** Repos the token can reach. For fine-grained tokens this is exactly the selected repos. */
+  userRepos: () => request<RestRepo[]>('/user/repos?per_page=100&sort=pushed'),
+
+  userOrgs: () => request<Array<{ login: string; avatar_url: string }>>('/user/orgs?per_page=100'),
 
   pull: (owner: string, repo: string, n: number) =>
     request<RestPull>(`${repoPath(owner, repo)}/pulls/${n}`),

@@ -469,6 +469,11 @@ table.diff { border-collapse: collapse; width: 100%; font: 12px/20px ui-monospac
 .diff tr.h td.num { background: var(--diff-hunk-num); }
 .diff-note { padding: 16px; text-align: center; font-size: 13px; color: var(--fg-muted); }
 
+.diag-detail { display: block; color: var(--fg-muted); font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+.diag-hints { border: 1px solid var(--attention); background: var(--attention-subtle); border-radius: 8px; padding: 10px 14px; font-size: 13px; }
+.diag-hints ul { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 6px; }
+.blankslate .btn { margin-top: 12px; }
+
 /* Toasts */
 .toasts {
   position: fixed; left: 16px; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom));
