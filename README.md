@@ -54,12 +54,14 @@ Installing needs **HTTPS**, so use the GitHub Pages URL. A plain `http://192.168
 |---|---|
 | Anything (always on) | Metadata: Read (automatic) |
 | PR list, details, files changed, labels, comments | Pull requests: Read |
+| CI status from external systems (Jenkins, Vercel…) | Commit statuses: Read |
+| GitHub Actions results: jobs, steps, durations | Actions: Read |
 | Approve / request changes / comment | Pull requests: Read and write |
 | Merge | Contents: Read and write |
-| Check status on cards and in details | Commit statuses: Read |
-| Check names, results and error annotations (incl. GitHub Actions) | Checks: Read |
 
-The smallest useful token: **Pull requests: Read**, **Commit statuses: Read** and **Checks: Read**. Make Pull requests *Read and write* to approve, and add *Contents: Read and write* only if you merge from the app. Actions: Read isn't used.
+Fine-grained tokens have **no "Checks" permission**, so they can't read check runs. For these tokens the app gets GitHub Actions results from the Actions API instead: one request per PR list for the cards, plus jobs and steps in PR details. Classic tokens (`repo`) read check runs directly, including their error annotations.
+
+The smallest useful token: **Pull requests: Read**, **Commit statuses: Read** and **Actions: Read**. Make Pull requests *Read and write* to approve, and add *Contents: Read and write* only if you merge from the app.
 
 
 Notes for fine-grained tokens:

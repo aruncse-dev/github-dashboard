@@ -404,7 +404,7 @@ export interface CheckSummary {
   pending: number;
   skipped: number;
   overall: 'pass' | 'fail' | 'pending' | 'none';
-  items: Array<{ name: string; url: string | null; bucket: CheckBucket }>;
+  items: Array<{ name: string; url: string | null; bucket: CheckBucket; fromCheckRun?: boolean }>;
 }
 
 export function summarizeChecks(pr: PullRequest): CheckSummary {
@@ -418,6 +418,7 @@ export function summarizeChecks(pr: PullRequest): CheckSummary {
       name: c.__typename === 'CheckRun' ? c.name ?? 'check' : c.context ?? 'status',
       url: (c.__typename === 'CheckRun' ? c.detailsUrl : c.targetUrl) ?? null,
       bucket,
+      fromCheckRun: c.__typename === 'CheckRun',
     });
   }
   s.total = rollup.contexts.totalCount;

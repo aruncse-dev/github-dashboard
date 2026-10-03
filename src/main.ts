@@ -10,6 +10,9 @@ import {
   $, closeDialog, diffstat, esc, hydrateIcons, icon, initDialogs, isDialogOpen, openDialog, renderPatch, safeUrl, timeAgo, toast, withBusy,
 } from './ui';
 import { favorites } from './favorites';
+import { checkToken, type Requirement } from './tokencheck';
+import { actionsBucket, actionsForCommit, actionsText, runsByCommit, type Job, type WorkflowRun } from './actions';
+import type { CheckSummary } from './queries';
 import { cache } from './cache';
 import { hasIncompleteQualifier, initSuggest, rememberSearch } from './suggest';
 
@@ -34,6 +37,8 @@ const state = {
   counts: { open: 0, closed: 0 },
   loadSeq: 0,
   current: null as PullRequest | null,
+  /** GitHub Actions runs by commit, for fine-grained tokens (they can't read check runs). */
+  runs: null as Map<string, WorkflowRun[]> | null,
 };
 
 const CHIP_QUALIFIERS: Record<string, string> = {
@@ -60,10 +65,35 @@ const repoOf = (pr: PullRequest) => pr.repository.name;
 function showLogin(message = ''): void {
   $('#app').classList.add('hidden');
   $('#login').classList.remove('hidden');
-  const err = $('#loginError');
-  err.textContent = message;
-  err.classList.toggle('hidden', !message);
-  setTimeout(() => $('#token').focus(), 50);
+  $('#tokenCheck').classList.add('hidden');
+  $('#loginContinue').classList.add('hidden');
+  setLoginMessage(message);
+  if (matchMedia('(pointer: fine)').matches) setTimeout(() => $('#token').focus(), 50);
+}
+
+function setLoginMessage(message: string, kind: 'error' | 'warn' = 'error'): void {
+  const el = $('#loginError');
+  el.textContent = message;
+  el.classList.toggle('warn', kind === 'warn');
+  el.classList.toggle('hidden', !message);
+}
+
+const REQ_ICON: Record<Requirement['status'], string> = {
+  pass: icon('check', 'c-pass'),
+  fail: icon('x', 'c-fail'),
+  warn: icon('alert', 'c-pending'),
+  info: icon('dot', 'c-muted'),
+  running: '<span class="spinner" style="width:14px;height:14px"></span>',
+};
+
+function renderTokenCheck(items: Requirement[]): void {
+  const box = $('#tokenCheck');
+  box.classList.remove('hidden');
+  box.innerHTML = items.map((i) => `
+    <div class="d-row">${REQ_ICON[i.status]}
+      <span class="d-grow"><b>${esc(i.label)}</b><small class="diag-detail">${esc(i.detail)}</small>
+        ${i.fix && (i.status === 'fail' || i.status === 'warn') ? `<span class="fix">→ ${esc(i.fix)}</span>` : ''}</span>
+    </div>`).join('');
 }
 
 async function boot(): Promise<void> {
@@ -156,6 +186,7 @@ async function loadPrs(reset: boolean): Promise<void> {
     state.hasMore = res.hasNextPage;
     state.counts = { open: res.openCount, closed: res.closedCount };
     renderList();
+    if (reset && isFineGrained()) void loadRuns(seq);
   } catch (e) {
     if (seq !== state.loadSeq) return;
     if (e instanceof GitHubError && e.status === 401) {
@@ -165,6 +196,36 @@ async function loadPrs(reset: boolean): Promise<void> {
     if (reset) $('#list').innerHTML = '';
     showListError(e);
   }
+}
+
+/** One request for the repo's recent Actions runs; cards then show their CI status. */
+async function loadRuns(seq: number): Promise<void> {
+  state.runs = null;
+  if (!state.repo) return;
+  try {
+    const runs = await runsByCommit(state.owner, state.repo);
+    if (seq !== state.loadSeq) return;
+    state.runs = runs;
+    renderList();
+  } catch {
+    /* no "Actions: Read": cards show commit statuses only */
+  }
+}
+
+/** Check summary for a card: GraphQL rollup, plus Actions runs when check runs are unreadable. */
+function ciSummary(pr: PullRequest): CheckSummary {
+  const s = summarizeChecks(pr);
+  const sha = pr.commits.nodes[0]?.commit.oid;
+  const runs = sha ? state.runs?.get(sha) : undefined;
+  if (!runs?.length || s.items.some((i) => i.fromCheckRun)) return s;
+  for (const r of runs) {
+    const bucket = actionsBucket(r.status, r.conclusion);
+    s[bucket]++;
+    s.total++;
+    s.items.push({ name: r.name ?? 'workflow', url: r.html_url, bucket, fromCheckRun: true });
+  }
+  s.overall = s.fail ? 'fail' : s.pending ? 'pending' : s.pass ? 'pass' : 'none';
+  return s;
 }
 
 function showListError(e: unknown): void {
@@ -223,7 +284,7 @@ function reviewLabel(pr: PullRequest): string {
 
 /** Compact checks status for cards: icon + count; tap opens the checks in PR details. */
 function checksStatus(pr: PullRequest): string {
-  const s = summarizeChecks(pr);
+  const s = ciSummary(pr);
   if (s.overall === 'none') return '';
   const attrs = `type="button" class="st" data-act="details" data-section="checks" data-id="${esc(pr.id)}"`;
   if (s.overall === 'fail') return `<button ${attrs} title="${s.fail} of ${s.total} checks failed" aria-label="${s.fail} of ${s.total} checks failed"><span class="c-fail">${icon('x')}${s.fail}/${s.total}</span></button>`;
@@ -324,6 +385,8 @@ const detail = {
   expanded: new Set<string>(),
   runs: new Map<string, RunState>(),
   showFullBody: false,
+  /** GitHub Actions jobs for the head commit (fine-grained tokens can't read check runs). */
+  actions: null as { loading: boolean; error: string; runs: WorkflowRun[]; jobs: Job[] } | null,
 };
 
 const AUTO_REFRESH_MS = 15000;
@@ -369,11 +432,29 @@ function detailChecks(d: PullRequestDetail): DetailCheck[] {
   return [...nodes].sort((a, b) => order[checkBucket(a)] - order[checkBucket(b)] || name(a).localeCompare(name(b)));
 }
 
-const hasPendingChecks = (d: PullRequestDetail) => detailChecks(d).some((c) => checkBucket(c) === 'pending');
+const hasCheckRuns = (d: PullRequestDetail) => detailChecks(d).some((c) => c.__typename === 'CheckRun');
+const hasPendingChecks = (d: PullRequestDetail) =>
+  detailChecks(d).some((c) => checkBucket(c) === 'pending') ||
+  !!detail.actions?.jobs.some((j) => actionsBucket(j.status, j.conclusion) === 'pending');
+
+async function loadActions(d: PullRequestDetail): Promise<void> {
+  const sha = d.commits.nodes[0]?.commit.oid;
+  if (!sha) return;
+  detail.actions = { loading: true, error: '', runs: detail.actions?.runs ?? [], jobs: detail.actions?.jobs ?? [] };
+  try {
+    const { runs, jobs } = await actionsForCommit(ownerOf(d), repoOf(d), sha);
+    detail.actions = { loading: false, error: '', runs, jobs };
+  } catch (e) {
+    const forbidden = e instanceof GitHubError && (e.status === 403 || e.status === 404);
+    detail.actions = { loading: false, runs: [], jobs: [],
+      error: forbidden ? 'GitHub Actions results need “Actions: Read” on the token.' : (e as Error).message };
+  }
+}
 
 async function openDetails(pr: PullRequest, focus?: string): Promise<void> {
   if (detail.pr?.id !== pr.id) {
     detail.data = null;
+    detail.actions = null;
     detail.expanded.clear();
     detail.runs.clear();
     detail.showFullBody = false;
@@ -397,6 +478,11 @@ async function loadDetails(focus?: string): Promise<void> {
     if (detail.pr?.id !== pr.id) return;
     detail.data = d;
     detail.error = d ? '' : 'Pull request not found.';
+    if (d && !hasCheckRuns(d)) {
+      renderDetails();
+      await loadActions(d);
+      if (detail.pr?.id !== pr.id) return;
+    }
   } catch (e) {
     if (detail.pr?.id !== pr.id) return;
     detail.error = (e as Error).message;
@@ -492,16 +578,20 @@ function renderDetails(): void {
   } else {
     // Checks
     const checks = detailChecks(d);
-    const total = d.checks.nodes[0]?.commit.statusCheckRollup?.contexts.totalCount ?? 0;
+    const jobs = hasCheckRuns(d) ? [] : sortJobs(detail.actions?.jobs ?? []);
+    const total = (d.checks.nodes[0]?.commit.statusCheckRollup?.contexts.totalCount ?? 0) + jobs.length;
     const counts: Record<CheckBucket, number> = { pass: 0, fail: 0, pending: 0, skipped: 0 };
     for (const c of checks) counts[checkBucket(c)]++;
+    for (const j of jobs) counts[actionsBucket(j.status, j.conclusion)]++;
     const countText = [
       counts.fail && `<span class="c-fail">${counts.fail} failed</span>`,
       counts.pending && `<span class="c-pending">${counts.pending} running</span>`,
       counts.pass && `<span class="c-pass">${counts.pass} passed</span>`,
       counts.skipped && `<span class="c-muted">${counts.skipped} skipped</span>`,
     ].filter(Boolean).join(' · ');
-    const rows = checks.map((c) => {
+    // Status contexts and Actions jobs in one list, failures first.
+    const order: Record<CheckBucket, number> = { fail: 0, pending: 1, pass: 2, skipped: 3 };
+    const checkRows = checks.map((c) => ({ bucket: checkBucket(c), html: (() => {
       const st = checkStatus(c);
       const isRun = c.__typename === 'CheckRun';
       const name = (isRun ? c.name : c.context) ?? 'check';
@@ -518,17 +608,22 @@ function renderDetails(): void {
           ${open ? (isRun ? checkRunPanel(c.id, c.detailsUrl)
             : `<div class="d-check-panel">${c.description ? `<p>${esc(c.description)}</p>` : ''}${c.targetUrl ? `<a class="d-link" href="${safeUrl(c.targetUrl)}" target="_blank" rel="noopener noreferrer">Open details ${icon('ext')}</a>` : '<p class="d-muted">No further details.</p>'}</div>`) : ''}
         </div>`;
-    }).join('');
+    })() }));
+    const jobRows = jobs.map((j) => ({ bucket: actionsBucket(j.status, j.conclusion), html: jobRow(j) }));
+    const rows = [...checkRows, ...jobRows].sort((a, b) => order[a.bucket] - order[b.bucket]).map((r) => r.html).join('');
+    const actionsNote = detail.actions?.loading ? spinnerHtml('Loading GitHub Actions…')
+      : detail.actions?.error ? `<p class="d-muted">${esc(detail.actions.error)}</p>` : '';
     parts.push(`
       <section class="d-section" id="detailChecks">
         <div class="d-head">
           <h4>Checks ${total ? `<span class="Counter">${total}</span>` : ''}</h4>
           <button class="btn btn-sm btn-invisible" type="button" data-dact="refresh" id="detailRefresh" title="Refresh">${icon('sync')}</button>
         </div>
-        ${checks.length
+        ${checks.length || jobs.length
           ? `<p class="d-counts">${countText}${hasPendingChecks(d) ? ' <span class="d-muted">· auto-refreshing</span>' : ''}</p><div class="d-list">${rows}</div>`
-          : '<p class="d-muted">No checks reported for the latest commit.</p>'}
-        ${total > checks.length ? `<p class="d-muted">+${total - checks.length} more checks not shown</p>` : ''}
+          : detail.actions?.loading ? '' : '<p class="d-muted">No checks reported for the latest commit.</p>'}
+        ${actionsNote}
+        ${total > checks.length + jobs.length ? `<p class="d-muted">+${total - checks.length - jobs.length} more checks not shown</p>` : ''}
       </section>`);
 
     // Reviews
@@ -603,6 +698,42 @@ function renderDetails(): void {
     canReview(fresh) ? `<button class="btn" data-dact="review">${icon('comment')}Review</button>` : '',
     canMerge(fresh) ? `<button class="btn btn-primary" data-dact="merge">${icon('merged')}Merge</button>` : '',
   ].join('');
+}
+
+function sortJobs(jobs: Job[]): Job[] {
+  const order: Record<CheckBucket, number> = { fail: 0, pending: 1, pass: 2, skipped: 3 };
+  return [...jobs].sort((a, b) => order[actionsBucket(a.status, a.conclusion)] - order[actionsBucket(b.status, b.conclusion)] || a.name.localeCompare(b.name));
+}
+
+function span(start: string | null, end: string | null): string {
+  if (!start) return '';
+  const t = formatDuration((end ? Date.parse(end) : Date.now()) - Date.parse(start));
+  return end ? t : `for ${t}`;
+}
+
+/** A GitHub Actions job row; expands to its steps (the failed step is marked). */
+function jobRow(j: Job): string {
+  const key = `job-${j.id}`;
+  const bucket = actionsBucket(j.status, j.conclusion);
+  const open = detail.expanded.has(key);
+  const steps = (j.steps ?? []).map((st) => {
+    const b = actionsBucket(st.status, st.conclusion);
+    return `<div class="d-step${b === 'fail' ? ' failed' : ''}">${BUCKET_ICON[b]}<span>${esc(st.name)}</span><small>${esc(span(st.started_at, st.completed_at))}</small></div>`;
+  }).join('');
+  return `
+    <div class="d-check${open ? ' open' : ''}">
+      <button class="d-check-row" type="button" data-check="${key}" aria-expanded="${open}">
+        ${BUCKET_ICON[bucket]}
+        <span class="d-check-name"><b>${esc(j.name)}</b>${j.workflow_name ? `<small>${esc(j.workflow_name)}</small>` : ''}</span>
+        <span class="d-check-status c-${bucket}">${esc(actionsText(j.status, j.conclusion))}<small>${esc(span(j.started_at, j.completed_at))}</small></span>
+        ${icon('chev', 'chev')}
+      </button>
+      ${open ? `<div class="d-check-panel">
+        ${steps ? `<div class="d-steps">${steps}</div>` : '<p class="d-muted">No steps reported yet.</p>'}
+        <p class="d-muted">Full logs are only available on GitHub.</p>
+        ${j.html_url ? `<a class="d-link" href="${safeUrl(j.html_url)}" target="_blank" rel="noopener noreferrer">Open on GitHub ${icon('ext')}</a>` : ''}
+      </div>` : ''}
+    </div>`;
 }
 
 async function toggleCheck(id: string): Promise<void> {
@@ -1216,10 +1347,17 @@ async function runDiagnostics(): Promise<void> {
   if (firstPr) {
     const status = await probe(`${path}/commits/${firstPr.head.sha}/status`);
     add({ label: 'Can read commit statuses', ok: status.ok, detail: status.ok ? 'OK' : status.message });
-    const runs = await probe(`${path}/commits/${firstPr.head.sha}/check-runs?per_page=1`);
-    add({ label: 'Can read check runs', ok: runs.ok, detail: runs.ok ? 'OK' : runs.message });
     if (!status.ok) hints.push('To show commit statuses, give the token “Commit statuses: Read”.');
-    if (!runs.ok) hints.push('To show check runs (including GitHub Actions results and their error annotations), give the token “Checks: Read”. “Actions: Read” doesn’t cover check runs.');
+    if (fine) {
+      // Fine-grained tokens have no "Checks" permission; the app reads GitHub Actions via the Actions API.
+      const actions = await probe(`${path}/actions/runs?per_page=1`);
+      add({ label: 'Can read GitHub Actions runs', ok: actions.ok, detail: actions.ok ? 'OK' : actions.message });
+      if (!actions.ok) hints.push('To show GitHub Actions results, give the token “Actions: Read” (fine-grained tokens can’t read check runs).');
+    } else {
+      const runs = await probe(`${path}/commits/${firstPr.head.sha}/check-runs?per_page=1`);
+      add({ label: 'Can read check runs', ok: runs.ok, detail: runs.ok ? 'OK' : runs.message });
+      if (!runs.ok) hints.push('To show check runs, the classic token needs the “repo” scope.');
+    }
   } else {
     add({ label: 'Checks / statuses', ok: null, detail: 'skipped (no pull request to test with)' });
   }
@@ -1247,19 +1385,49 @@ function init(): void {
     applyTheme(theme);
   });
 
+  // Token type tabs on the sign-in page.
+  document.querySelectorAll<HTMLElement>('[data-ttab]').forEach((tab) =>
+    tab.addEventListener('click', () => {
+      document.querySelectorAll<HTMLElement>('[data-ttab]').forEach((t) => t.setAttribute('aria-pressed', String(t === tab)));
+      document.querySelectorAll<HTMLElement>('[data-tpanel]').forEach((p) => p.classList.toggle('hidden', p.dataset.tpanel !== tab.dataset.ttab));
+    }));
+
+  // Sign in: the token is saved only if it meets the minimum requirements.
+  let pendingToken: string | null = null;
+  const accept = (token: string) => {
+    saveToken(token);
+    pendingToken = null;
+    $<HTMLInputElement>('#token').value = '';
+    $('#tokenCheck').classList.add('hidden');
+    $('#loginContinue').classList.add('hidden');
+    void boot();
+  };
+  $('#token').addEventListener('input', () => {
+    pendingToken = null;
+    $('#loginContinue').classList.add('hidden');
+  });
   $('#loginForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const token = $<HTMLInputElement>('#token').value.trim();
     if (!token) return;
-    try {
-      await withBusy($<HTMLButtonElement>('#loginBtn'), () => rest.user(token));
-      saveToken(token);
-      $<HTMLInputElement>('#token').value = '';
-      void boot();
-    } catch (err) {
-      showLogin((err as Error).message);
+    pendingToken = null;
+    $('#loginContinue').classList.add('hidden');
+    setLoginMessage('');
+    const result = await withBusy($<HTMLButtonElement>('#loginBtn'), () => checkToken(token, renderTokenCheck));
+    renderTokenCheck(result.items);
+    if (!result.ok) {
+      setLoginMessage('This token doesn’t meet the minimum requirements, so it wasn’t saved. Fix the items marked ✕ and try again.');
+      return;
     }
+    if (result.items.some((i) => i.status === 'warn')) {
+      pendingToken = token;
+      $('#loginContinue').classList.remove('hidden');
+      setLoginMessage('The token works, but some features will be limited (see ⚠ above).', 'warn');
+      return;
+    }
+    accept(token);
   });
+  $('#loginContinue').addEventListener('click', () => { if (pendingToken) accept(pendingToken); });
 
   $('#logoutBtn').addEventListener('click', () => {
     if (!confirm('Remove the token from this browser?')) return;

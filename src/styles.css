@@ -135,8 +135,27 @@ select.form-control {
 }
 
 /* ---------- Token screen ---------- */
-.login-wrap { display: grid; place-items: center; min-height: 100vh; min-height: 100dvh; padding: 24px 16px; }
-.login-inner { width: 100%; max-width: 360px; display: grid; justify-items: center; }
+.login-wrap {
+  display: grid; justify-items: center; align-items: start; min-height: 100vh; min-height: 100dvh;
+  padding: calc(24px + env(safe-area-inset-top)) 16px calc(32px + env(safe-area-inset-bottom));
+}
+.login-inner { width: 100%; max-width: 420px; display: grid; justify-items: center; gap: 0; }
+.login-tagline { text-align: center; color: var(--fg-muted); margin: -8px 0 16px; font-size: 14px; }
+.callout-title { font-weight: 600; color: var(--fg); margin: 0 0 8px; font-size: 14px; }
+.callout ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+details.callout > summary { cursor: pointer; margin: 0; }
+details.callout[open] > summary { margin-bottom: 8px; }
+.token-tabs { margin: 4px 0 12px; }
+.token-tabs button { height: 32px; }
+.perm-table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 13px; }
+.perm-table th { text-align: left; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; color: var(--fg-muted); padding: 4px 6px 6px 0; }
+.perm-table td { padding: 6px 6px 6px 0; border-top: 1px solid var(--border-muted); color: var(--fg); vertical-align: middle; }
+.perm-table td:last-child { text-align: right; padding-right: 0; }
+.callout .btn-sm { margin-top: 4px; gap: 6px; }
+.callout .btn-sm .octicon { width: 14px; height: 14px; }
+.token-check .d-row { padding: 8px 10px; }
+.token-check .fix { display: block; color: var(--fg); font-size: 12px; margin-top: 2px; }
+.login .btn-lg { width: 100%; }
 .login-logo { margin-bottom: 16px; color: var(--fg); }
 .login-logo { width: 64px; height: 64px; }
 .login-title { text-align: center; font-size: 24px; font-weight: 300; margin: 0 0 16px; letter-spacing: -.5px; }
@@ -145,6 +164,7 @@ select.form-control {
   border-radius: 6px; padding: 16px; display: grid; gap: 12px;
 }
 .login-error { color: var(--danger); font-size: 13px; margin: 0; }
+.login-error.warn { color: var(--attention); }
 .callout {
   width: 100%; margin-top: 16px; padding: 16px; border: 1px solid var(--border);
   border-radius: 6px; font-size: 13px; color: var(--fg-muted);
@@ -323,6 +343,12 @@ button.st:hover { text-decoration: underline; }
   font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word;
   max-height: 320px; overflow: auto;
 }
+.d-steps { display: grid; gap: 2px; }
+.d-step { display: flex; align-items: center; gap: 8px; font-size: 12.5px; padding: 3px 0; min-width: 0; }
+.d-step span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.d-step small { color: var(--fg-muted); font-size: 11px; white-space: nowrap; }
+.d-step .octicon { width: 14px; height: 14px; }
+.d-step.failed span { color: var(--danger); font-weight: 600; }
 .d-subhead { font-size: 12px; font-weight: 600; color: var(--fg-muted); text-transform: uppercase; letter-spacing: .03em; }
 .d-ann { display: grid; gap: 4px; }
 .d-ann-head { display: flex; align-items: center; gap: 6px; min-width: 0; }

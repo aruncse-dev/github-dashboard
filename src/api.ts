@@ -79,8 +79,7 @@ export interface ProbeResult {
 }
 
 /** Like `request`, but never throws: used by the token check. */
-export async function probe(path: string, init: RequestInit = {}): Promise<ProbeResult> {
-  const token = getToken();
+export async function probe(path: string, init: RequestInit = {}, token: string | null = getToken()): Promise<ProbeResult> {
   try {
     const headers: Record<string, string> = { Accept: 'application/vnd.github+json', Authorization: `Bearer ${token}` };
     if (init.body) headers['Content-Type'] = 'application/json';
@@ -107,8 +106,30 @@ export function setWarningHandler(fn: (msg: string) => void): void {
 
 interface GraphQLResponse<T> {
   data?: T | null;
-  errors?: Array<{ message: string; type?: string }>;
+  errors?: Array<{ message: string; type?: string; path?: Array<string | number> }>;
 }
+
+/**
+ * GitHub returns `null` in a connection's `nodes` for items the token may not read
+ * (e.g. check runs for fine-grained tokens). Drop them and keep `totalCount` in step.
+ */
+function dropHidden<T>(value: T): T {
+  if (Array.isArray(value)) return value.map(dropHidden) as T;
+  if (value && typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    for (const key of Object.keys(obj)) obj[key] = dropHidden(obj[key]);
+    if (Array.isArray(obj.nodes)) {
+      const before = obj.nodes.length;
+      obj.nodes = obj.nodes.filter((n) => n !== null);
+      const hidden = before - (obj.nodes as unknown[]).length;
+      if (hidden && typeof obj.totalCount === 'number') obj.totalCount = Math.max(0, obj.totalCount - hidden);
+    }
+  }
+  return value;
+}
+
+const CHECK_FIELDS = new Set(['statusCheckRollup', 'contexts', 'checkSuite', 'checks']);
+const isCheckFieldError = (e: { path?: Array<string | number> }) => !!e.path?.some((p) => CHECK_FIELDS.has(String(p)));
 
 export async function graphql<T>(query: string, variables: Record<string, unknown> = {}, quiet = false): Promise<T> {
   const res = await request<GraphQLResponse<T>>('/graphql', {
@@ -120,8 +141,9 @@ export async function graphql<T>(query: string, variables: Record<string, unknow
     throw new GitHubError(describeError(200, { message: errors.map((e) => e.message).join('; ') || 'GraphQL error' }), 200);
   }
   // Partial data (e.g. one SAML-protected org hidden from search results): still show what we got.
-  if (errors.length && !quiet) onWarning(describeError(200, { message: errors[0].message }));
-  return res.data;
+  const relevant = errors.filter((e) => !isCheckFieldError(e));
+  if (relevant.length && !quiet) onWarning(describeError(200, { message: relevant[0].message }));
+  return dropHidden(res.data);
 }
 
 // ---------- REST ----------
@@ -177,6 +199,14 @@ export const rest = {
   userRepos: () => request<RestRepo[]>('/user/repos?per_page=100&sort=pushed'),
 
   userOrgs: () => request<Array<{ login: string; avatar_url: string }>>('/user/orgs?per_page=100'),
+
+  /** Workflow runs (Actions: Read). `sha` narrows to one commit; empty = most recent runs. */
+  workflowRuns: (owner: string, repo: string, sha: string) =>
+    request<{ workflow_runs: import('./actions').WorkflowRun[] }>(
+      `${repoPath(owner, repo)}/actions/runs?per_page=100${sha ? `&head_sha=${encodeURIComponent(sha)}` : ''}`),
+
+  runJobs: (owner: string, repo: string, runId: number) =>
+    request<{ jobs: import('./actions').Job[] }>(`${repoPath(owner, repo)}/actions/runs/${runId}/jobs?per_page=100`),
 
   pull: (owner: string, repo: string, n: number) =>
     request<RestPull>(`${repoPath(owner, repo)}/pulls/${n}`),
