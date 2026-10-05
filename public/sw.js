@@ -1,6 +1,6 @@
 // Service worker: caches only this app's own files so it opens instantly (and offline).
 // It never touches cross-origin requests, so GitHub API calls and the token are not cached.
-const CACHE = 'pr-dashboard-v2';
+const CACHE = 'pr-dashboard-v3';
 const SHELL = ['./', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png'];
 
 self.addEventListener('install', (event) => {
