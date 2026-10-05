@@ -141,14 +141,9 @@ select.form-control {
 }
 .login-inner { width: 100%; max-width: 420px; display: grid; justify-items: center; gap: 0; }
 .login-tagline { text-align: center; color: var(--fg-muted); margin: -8px 0 16px; font-size: 14px; }
-.callout-title { font-weight: 600; color: var(--fg); margin: 0 0 8px; font-size: 14px; }
-.callout ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
-details.callout > summary { cursor: pointer; margin: 0; }
-details.callout[open] > summary { margin-bottom: 8px; }
 .token-tabs { margin: 4px 0 12px; }
 .token-tabs button { height: 32px; }
 .perm-table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 13px; }
-.perm-table th { text-align: left; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; color: var(--fg-muted); padding: 4px 6px 6px 0; }
 .perm-table td { padding: 6px 6px 6px 0; border-top: 1px solid var(--border-muted); color: var(--fg); vertical-align: middle; }
 .perm-table td:last-child { text-align: right; padding-right: 0; }
 .callout .btn-sm { margin-top: 4px; gap: 6px; }

@@ -251,7 +251,7 @@ function ciSummary(pr: PullRequest): CheckSummary {
   return s;
 }
 
-const HIDDEN_HINT = 'Fine-grained tokens can’t read checks from GitHub Apps (e.g. Semgrep). Open the PR on GitHub to see them.';
+const HIDDEN_HINT = 'See it on GitHub.';
 
 function showListError(e: unknown): void {
   const box = $('#listError');
@@ -662,9 +662,7 @@ function renderDetails(): void {
     const hiddenNote = !hidden ? '' : `
       ${hiddenNow === 'fail' ? `<p class="d-hidden c-fail">${icon('x')} GitHub reports a failing check that this token can’t read.</p>`
         : hiddenNow === 'pending' ? `<p class="d-hidden c-pending">${icon('dot', 'pulse')} GitHub reports a running check that this token can’t read.</p>` : ''}
-      <p class="d-muted">${isFineGrained()
-        ? 'Fine-grained tokens can’t read checks created by GitHub Apps (e.g. Semgrep), and GitHub offers no permission that allows it. GitHub Actions jobs and commit statuses are shown. Use a classic token (repo scope) to see every check.'
-        : 'Some checks aren’t readable with this token.'}
+      <p class="d-muted">${isFineGrained() ? 'Checks from GitHub Apps (e.g. Semgrep) need a classic token.' : 'Some checks aren’t readable with this token.'}
         <a class="d-link" href="${safeUrl(`${pr.url}/checks`)}" target="_blank" rel="noopener noreferrer">All checks on GitHub ${icon('ext')}</a></p>`;
     parts.push(`
       <section class="d-section" id="detailChecks">
