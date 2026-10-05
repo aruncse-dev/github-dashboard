@@ -1,12 +1,13 @@
 import { defineConfig, type Plugin } from 'vite';
 
-// Locks the built page down so it can only talk to GitHub's API and load GitHub avatars.
+// Locks the built page down so it can only talk to GitHub's API and load GitHub-hosted images
+// (avatars, plus images and badges embedded in PR descriptions, which GitHub proxies via its CDN).
 // Applied to production builds only (the dev server needs its own websocket).
 const CSP = [
   "default-src 'self'",
   "script-src 'self'",
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: https://avatars.githubusercontent.com",
+  "img-src 'self' data: https://*.githubusercontent.com",
   'connect-src https://api.github.com',
   "object-src 'none'",
   "base-uri 'none'",

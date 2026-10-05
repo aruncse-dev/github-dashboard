@@ -14,6 +14,7 @@ import { checkToken, type Requirement } from './tokencheck';
 import { actionsBucket, actionsForCommit, actionsText, runsByCommit, type Job, type WorkflowRun } from './actions';
 import type { CheckSummary } from './queries';
 import { cache } from './cache';
+import { renderGitHubHtml } from './markdown';
 import { hasIncompleteQualifier, initSuggest, rememberSearch } from './suggest';
 
 // ---------- State ----------
@@ -658,7 +659,7 @@ function renderDetails(): void {
     parts.push(`
       <section class="d-section">
         <div class="d-head"><h4>Description</h4></div>
-        ${body ? `<div class="d-body">${esc(long && !detail.showFullBody ? clip(body, 700) : body)}</div>
+        ${body ? `<div class="markdown-body${long && !detail.showFullBody ? ' is-clipped' : ''}">${renderGitHubHtml(d.bodyHTML)}</div>
           ${long ? `<button class="btn btn-sm" type="button" data-dact="body">${detail.showFullBody ? 'Show less' : 'Show more'}</button>` : ''}`
           : '<p class="d-muted">No description provided.</p>'}
       </section>`);
@@ -683,7 +684,7 @@ function renderDetails(): void {
         ${comments.length ? `<div class="d-comments">${comments.map((c) => `
           <div class="d-comment">
             <div class="d-comment-head"><b>${esc(c.author?.login ?? 'ghost')}</b><span class="d-muted">${esc(timeAgo(c.createdAt, true))}</span></div>
-            <div class="d-body">${esc(clip(c.bodyText.trim(), 1200))}</div>
+            <div class="markdown-body d-comment-body">${renderGitHubHtml(c.bodyHTML)}</div>
           </div>`).join('')}</div>
           ${d.recentComments.totalCount > comments.length ? `<p class="d-muted">Showing the latest ${comments.length} of ${d.recentComments.totalCount}</p>` : ''}`
           : '<p class="d-muted">No comments.</p>'}

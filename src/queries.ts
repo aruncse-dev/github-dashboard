@@ -211,6 +211,7 @@ export interface DetailCheck {
 
 export interface PullRequestDetail extends PullRequest {
   bodyText: string;
+  bodyHTML: string;
   additions: number;
   deletions: number;
   changedFiles: number;
@@ -220,7 +221,7 @@ export interface PullRequestDetail extends PullRequest {
   recentCommits: {
     nodes: Array<{ commit: { abbreviatedOid: string; messageHeadline: string; committedDate: string; author: { name: string | null; user: { login: string } | null } | null } }>;
   };
-  recentComments: { totalCount: number; nodes: Array<{ author: { login: string } | null; bodyText: string; createdAt: string }> };
+  recentComments: { totalCount: number; nodes: Array<{ author: { login: string } | null; bodyText: string; bodyHTML: string; createdAt: string }> };
   checks: {
     nodes: Array<{ commit: { statusCheckRollup: { state: string; contexts: { totalCount: number; nodes: DetailCheck[] } } | null } }>;
   };
@@ -242,14 +243,14 @@ export async function fetchPullRequestDetail(id: string): Promise<PullRequestDet
       node(id: $id) {
         ... on PullRequest {
           ...PR
-          bodyText additions deletions changedFiles
+          bodyText bodyHTML additions deletions changedFiles
           labels(first: 20) { nodes { name color } }
           latestReviews(first: 20) { nodes { author { login } state submittedAt } }
           commitsCount: commits { totalCount }
           recentCommits: commits(last: 5) {
             nodes { commit { abbreviatedOid messageHeadline committedDate author { name user { login } } } }
           }
-          recentComments: comments(last: 10) { totalCount nodes { author { login } bodyText createdAt } }
+          recentComments: comments(last: 10) { totalCount nodes { author { login } bodyText bodyHTML createdAt } }
           checks: commits(last: 1) {
             nodes {
               commit {

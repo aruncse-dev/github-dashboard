@@ -362,8 +362,49 @@ button.st:hover { text-decoration: underline; }
 .d-commit code { color: var(--accent); background: none; padding: 0; flex: none; }
 .d-grow { flex: 1; min-width: 0; display: grid; word-break: break-word; }
 .d-grow small { color: var(--fg-muted); font-size: 11px; }
-.d-body { white-space: pre-wrap; word-break: break-word; font-size: 14px; line-height: 1.55; }
-.d-body + .btn { justify-self: start; }
+.markdown-body { font-size: 14px; line-height: 1.55; word-wrap: break-word; overflow-wrap: anywhere; min-width: 0; }
+.markdown-body > :first-child { margin-top: 0 !important; }
+.markdown-body > :last-child { margin-bottom: 0 !important; }
+.markdown-body :is(p, ul, ol, blockquote, pre, table, details, dl) { margin: 0 0 12px; }
+.markdown-body :is(h1, h2, h3, h4, h5, h6) { margin: 18px 0 10px; font-weight: 600; line-height: 1.25; }
+.markdown-body h1 { font-size: 1.5em; padding-bottom: .3em; border-bottom: 1px solid var(--border-muted); }
+.markdown-body h2 { font-size: 1.3em; padding-bottom: .3em; border-bottom: 1px solid var(--border-muted); }
+.markdown-body h3 { font-size: 1.15em; }
+.markdown-body :is(h4, h5, h6) { font-size: 1em; }
+.markdown-body h6 { color: var(--fg-muted); }
+.markdown-body :is(ul, ol) { padding-left: 2em; }
+.markdown-body li + li { margin-top: 4px; }
+.markdown-body li > :is(ul, ol) { margin: 4px 0 0; }
+.markdown-body .contains-task-list { padding-left: 0; list-style: none; }
+.markdown-body .contains-task-list .contains-task-list { padding-left: 1.5em; }
+.markdown-body .task-list-item input { margin: 0 .3em 0 0; vertical-align: middle; }
+.markdown-body a { color: var(--accent); }
+.markdown-body :is(.user-mention, .team-mention) { font-weight: 600; color: var(--fg); }
+.markdown-body img { max-width: 100%; height: auto; vertical-align: middle; }
+.markdown-body hr { height: 3px; border: 0; background: var(--border-muted); margin: 16px 0; }
+.markdown-body blockquote { padding: 0 1em; color: var(--fg-muted); border-left: 3px solid var(--border); }
+.markdown-body :is(code, kbd, samp) { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 85%; }
+.markdown-body :not(pre) > code { padding: .15em .4em; border-radius: 6px; background: var(--neutral-muted); }
+.markdown-body kbd { padding: 2px 5px; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 6px; background: var(--canvas-subtle); }
+.markdown-body pre { padding: 12px; overflow: auto; border-radius: 6px; background: var(--canvas-subtle); line-height: 1.45; }
+.markdown-body pre code { font-size: 12px; white-space: pre; overflow-wrap: normal; }
+.markdown-body table { display: block; max-width: 100%; overflow: auto; border-collapse: collapse; font-size: 13px; }
+.markdown-body :is(th, td) { padding: 5px 10px; border: 1px solid var(--border); }
+.markdown-body th { font-weight: 600; background: var(--canvas-subtle); }
+.markdown-body details summary { cursor: pointer; }
+.markdown-body .markdown-alert { padding: 4px 12px; border-left: 3px solid var(--accent); }
+.markdown-body .markdown-alert > p:first-child { font-weight: 600; color: var(--accent); }
+.markdown-body .markdown-alert-tip { border-color: var(--success); }
+.markdown-body .markdown-alert-tip > p:first-child { color: var(--success); }
+.markdown-body .markdown-alert-important { border-color: var(--done); }
+.markdown-body .markdown-alert-important > p:first-child { color: var(--done); }
+.markdown-body .markdown-alert-warning { border-color: var(--attention); }
+.markdown-body .markdown-alert-warning > p:first-child { color: var(--attention); }
+.markdown-body .markdown-alert-caution { border-color: var(--danger); }
+.markdown-body .markdown-alert-caution > p:first-child { color: var(--danger); }
+.markdown-body.is-clipped { max-height: 320px; overflow: hidden; mask-image: linear-gradient(#000 75%, transparent); }
+.markdown-body + .btn { justify-self: start; }
+.d-comment-body { max-height: 420px; overflow: auto; }
 .d-comments { display: grid; gap: 10px; }
 .d-comment { border: 1px solid var(--border-muted); border-radius: 8px; padding: 10px 12px; display: grid; gap: 6px; }
 .d-comment-head { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; }
