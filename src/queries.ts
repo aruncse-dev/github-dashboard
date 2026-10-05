@@ -13,6 +13,8 @@ export type CheckBucket = 'pass' | 'fail' | 'pending' | 'skipped';
 export interface CheckContext {
   __typename: 'CheckRun' | 'StatusContext';
   // CheckRun
+  /** Same as the Actions job id for checks GitHub Actions creates. */
+  databaseId?: number;
   name?: string;
   status?: string;
   conclusion?: string | null;
@@ -59,11 +61,18 @@ export interface PullRequest {
         oid: string;
         statusCheckRollup: {
           state: 'SUCCESS' | 'FAILURE' | 'ERROR' | 'PENDING' | 'EXPECTED';
-          contexts: { totalCount: number; nodes: CheckContext[] };
+          contexts: CheckConnection<CheckContext>;
         } | null;
       };
     }>;
   };
+}
+
+export interface CheckConnection<T> {
+  totalCount: number;
+  nodes: T[];
+  /** Check runs the token can't read (dropped by the GraphQL client). */
+  hiddenCount?: number;
 }
 
 export interface Repo {
@@ -108,7 +117,7 @@ const PR_FIELDS = `
               nodes {
                 __typename
                 ... on CheckRun {
-                  name status conclusion detailsUrl startedAt completedAt
+                  databaseId name status conclusion detailsUrl startedAt completedAt
                   checkSuite { workflowRun { event workflow { name } } }
                 }
                 ... on StatusContext { context state targetUrl }
@@ -168,7 +177,8 @@ export interface SearchResult {
 
 /** `scope` is everything except the is:open / is:closed part, e.g. "org:acme review:approved". */
 export async function searchPullRequests(scope: string, state: 'open' | 'closed', after: string | null): Promise<SearchResult> {
-  const q = (s: string) => `is:pr is:${s} archived:false ${scope} sort:updated-desc`;
+  // Newest pull requests first, i.e. by PR number (not by last update).
+  const q = (s: string) => `is:pr is:${s} archived:false ${scope} sort:created-desc`;
   const data = await graphql<{
     open: { issueCount: number };
     closed: { issueCount: number };
@@ -217,7 +227,7 @@ export interface PullRequestDetail extends PullRequest {
   };
   recentComments: { totalCount: number; nodes: Array<{ author: { login: string } | null; bodyText: string; bodyHTML: string; createdAt: string }> };
   checks: {
-    nodes: Array<{ commit: { statusCheckRollup: { state: string; contexts: { totalCount: number; nodes: DetailCheck[] } } | null } }>;
+    nodes: Array<{ commit: { statusCheckRollup: { state: string; contexts: CheckConnection<DetailCheck> } | null } }>;
   };
 }
 
@@ -255,7 +265,7 @@ export async function fetchPullRequestDetail(id: string): Promise<PullRequestDet
                     nodes {
                       __typename
                       ... on CheckRun {
-                        id name status conclusion startedAt completedAt detailsUrl
+                        id databaseId name status conclusion startedAt completedAt detailsUrl
                         checkSuite { workflowRun { event workflow { name } } }
                       }
                       ... on StatusContext { id context state description targetUrl createdAt }
@@ -399,7 +409,9 @@ export interface CheckSummary {
   pending: number;
   skipped: number;
   overall: 'pass' | 'fail' | 'pending' | 'none';
-  items: Array<{ name: string; url: string | null; bucket: CheckBucket; fromCheckRun?: boolean }>;
+  /** Set when GitHub's overall state shows hidden checks failing or running. */
+  hiddenState?: 'fail' | 'pending' | null;
+  items: Array<{ name: string; url: string | null; bucket: CheckBucket; fromCheckRun?: boolean; runId?: number }>;
 }
 
 const checkName = (c: CheckContext): string => (c.__typename === 'CheckRun' ? c.name : c.context) ?? '';
@@ -414,15 +426,27 @@ export function latestChecks<T extends CheckContext>(nodes: T[]): T[] {
     const run = c.checkSuite?.workflowRun;
     const key = [c.__typename, run?.workflow.name ?? '', run?.event ?? '', checkName(c)].join('\u0000');
     const prev = latest.get(key);
-    if (!prev || (c.startedAt ?? c.completedAt ?? '') >= (prev.startedAt ?? prev.completedAt ?? '')) latest.set(key, c);
+    // Ids only grow, so the highest is the newest run (a queued re-run may not have a start time yet).
+    if (!prev || (c.databaseId ?? 0) >= (prev.databaseId ?? 0)) latest.set(key, c);
   }
   return [...latest.values()];
 }
 
-/** Checks of a rollup: latest runs only, plus how many more exist beyond the fetched page. */
-export function rollupChecks<T extends CheckContext>(contexts: { totalCount: number; nodes: T[] } | undefined): { checks: T[]; more: number } {
-  if (!contexts) return { checks: [], more: 0 };
-  return { checks: latestChecks(contexts.nodes), more: Math.max(0, contexts.totalCount - contexts.nodes.length) };
+/** Checks of a rollup: latest runs only, how many more exist beyond the fetched page, and how many the token can't read. */
+export function rollupChecks<T extends CheckContext>(contexts: CheckConnection<T> | undefined): { checks: T[]; more: number; hidden: number } {
+  if (!contexts) return { checks: [], more: 0, hidden: 0 };
+  return { checks: latestChecks(contexts.nodes), more: Math.max(0, contexts.totalCount - contexts.nodes.length), hidden: contexts.hiddenCount ?? 0 };
+}
+
+/**
+ * GitHub's overall state covers checks the token can't read. When the visible checks don't
+ * explain it, report what the hidden ones must be doing.
+ */
+export function hiddenState(s: { fail: number; pending: number }, rollupState: string | undefined, hidden: number): 'fail' | 'pending' | null {
+  if (!hidden || s.fail) return null;
+  if (rollupState === 'FAILURE' || rollupState === 'ERROR') return 'fail';
+  if ((rollupState === 'PENDING' || rollupState === 'EXPECTED') && !s.pending) return 'pending';
+  return null;
 }
 
 export const BUCKET_ORDER: Record<CheckBucket, number> = { fail: 0, pending: 1, pass: 2, skipped: 3 };
@@ -454,6 +478,7 @@ export function summarizeChecks(pr: PullRequest): CheckSummary {
       url: (c.__typename === 'CheckRun' ? c.detailsUrl : c.targetUrl) ?? null,
       bucket: checkBucket(c),
       fromCheckRun: c.__typename === 'CheckRun',
+      runId: c.databaseId,
     });
   }
   return finishSummary(s, more);

@@ -59,7 +59,13 @@ Installing needs **HTTPS**, so use the GitHub Pages URL. A plain `http://192.168
 | Approve / request changes / comment | Pull requests: Read and write |
 | Merge | Contents: Read and write |
 
-Fine-grained tokens have **no "Checks" permission**, so they can't read check runs. For these tokens the app gets GitHub Actions results from the Actions API instead: one request per PR list for the cards, plus jobs and steps in PR details. Classic tokens (`repo`) read check runs directly, including their error annotations.
+Fine-grained tokens have **no "Checks" permission**: GitHub offers it only to GitHub Apps, and no other permission (Workflows, write access…) unlocks it. So with a fine-grained token:
+
+- **GitHub Actions** results come from the Actions API instead (Actions: Read): every job of the head commit's workflow runs, with steps, on cards and in PR details.
+- **External CI** that posts commit statuses (Jenkins, Vercel…) shows via Commit statuses: Read.
+- **Checks created by other GitHub Apps** (e.g. Semgrep) can't be read. PR details says so and links to the checks on GitHub; when GitHub's overall state shows such a check failing or running, the card and details flag it.
+
+Classic tokens (`repo`) read every check run directly, including their error annotations. Use one if you need app checks.
 
 The smallest useful token: **Pull requests: Read**, **Commit statuses: Read** and **Actions: Read**. Make Pull requests *Read and write* to approve, and add *Contents: Read and write* only if you merge from the app.
 
@@ -75,7 +81,7 @@ If your org enforces SAML SSO, authorize the token for the org (GitHub → Setti
 
 | Feature | GitHub API |
 |---|---|
-| PR list with review state, checks, conflicts, counts | GraphQL `search(type: ISSUE)`, 10 per page + Load more |
+| PR list with review state, checks, conflicts, counts | GraphQL `search(type: ISSUE)`, newest PR number first, 10 per page + Load more |
 | Org picker | GraphQL `viewer.organizations` (cached) |
 | Repo picker | 30 most recently updated repos (one request, cached), plus live GraphQL `search(type: REPOSITORY)` as you type |
 | Search suggestions | Qualifiers, recent searches, authors and branches from loaded PRs, repo labels via GraphQL `repository.labels` |

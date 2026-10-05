@@ -25,7 +25,7 @@
       <div class="login-inner">
         <div class="login-logo" data-logo></div>
         <h1 class="login-title">PR Dashboard</h1>
-        <p class="login-tagline">Review, approve and merge GitHub pull requests from your phone, with CI checks, diffs and comments.</p>
+        <p class="login-tagline">Review and merge GitHub pull requests from your phone.</p>
 
         <form class="login" id="loginForm">
           <div>
@@ -34,66 +34,40 @@
           </div>
           <div class="d-list token-check hidden" id="tokenCheck" aria-live="polite"></div>
           <p class="login-error hidden" id="loginError" role="alert"></p>
-          <button class="btn btn-primary btn-lg" id="loginBtn" type="submit">Check token &amp; sign in</button>
+          <button class="btn btn-primary btn-lg" id="loginBtn" type="submit">Sign in</button>
           <button class="btn btn-lg hidden" id="loginContinue" type="button">Continue with limited features</button>
+          <p class="d-muted">🔒 Stored only in this browser and sent only to api.github.com.</p>
         </form>
 
         <div class="callout">
-          <p class="callout-title">🔒 Private by design</p>
-          <ul>
-            <li>Your token is stored only in <b>this browser</b> and sent only to <code>api.github.com</code>.</li>
-            <li>No server, no tracking. <b>Forget token</b> (top right) removes it.</li>
-            <li>The token is checked against the minimum requirements before it’s saved.</li>
-          </ul>
-        </div>
-
-        <div class="callout">
-          <p class="callout-title">Token requirements</p>
           <div class="seg token-tabs" role="tablist" aria-label="Token type">
             <button type="button" role="tab" data-ttab="fine" aria-pressed="true">Fine-grained</button>
             <button type="button" role="tab" data-ttab="classic" aria-pressed="false">Classic</button>
           </div>
 
           <div data-tpanel="fine">
-            <p>Resource owner: <b>your organization</b>. Repository access: <b>only the repos you need</b>. Organization permissions: none.</p>
             <table class="perm-table">
-              <thead><tr><th>Repository permission</th><th>Access</th><th></th></tr></thead>
               <tbody>
-                <tr><td>Pull requests</td><td>Read</td><td><span class="Label Label--danger">Required</span></td></tr>
-                <tr><td>Commit statuses</td><td>Read</td><td><span class="Label Label--danger">Required</span></td></tr>
-                <tr><td>Actions</td><td>Read</td><td><span class="Label Label--attention">Recommended</span></td></tr>
-                <tr><td>Pull requests</td><td>Read &amp; write</td><td><span class="Label">To approve</span></td></tr>
-                <tr><td>Contents</td><td>Read &amp; write</td><td><span class="Label">To merge</span></td></tr>
+                <tr><td>Pull requests</td><td>Read · Read &amp; write to approve</td></tr>
+                <tr><td>Commit statuses</td><td>Read</td></tr>
+                <tr><td>Actions</td><td>Read</td></tr>
+                <tr><td>Contents</td><td>Read &amp; write to merge</td></tr>
               </tbody>
             </table>
-            <p class="d-muted">Metadata: Read is added automatically. Fine-grained tokens have no “Checks” permission, so GitHub Actions results come through Actions: Read. If your organization approves fine-grained tokens, an org owner must approve it first.</p>
+            <p class="d-muted">Doesn’t show checks from GitHub Apps (e.g. Semgrep).</p>
             <a class="btn btn-sm" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer"><span data-icon="ext"></span>Create fine-grained token</a>
           </div>
 
           <div data-tpanel="classic" class="hidden">
-            <p>Simplest option: one scope covers everything. Works across all your organizations (authorize SSO if your org uses it).</p>
             <table class="perm-table">
-              <thead><tr><th>Scope</th><th>Gives</th><th></th></tr></thead>
               <tbody>
-                <tr><td><code>repo</code></td><td>PRs, checks, reviews, merging</td><td><span class="Label Label--danger">Required</span></td></tr>
-                <tr><td><code>read:org</code></td><td>Lists your organizations</td><td><span class="Label">Optional</span></td></tr>
+                <tr><td><code>repo</code></td><td>Everything, including all checks</td></tr>
+                <tr><td><code>read:org</code></td><td>Optional: lists your orgs</td></tr>
               </tbody>
             </table>
             <a class="btn btn-sm" href="https://github.com/settings/tokens/new?scopes=repo,read:org&amp;description=PR%20Dashboard" target="_blank" rel="noopener noreferrer"><span data-icon="ext"></span>Create classic token</a>
           </div>
         </div>
-
-        <details class="callout">
-          <summary class="callout-title">What you can do</summary>
-          <ul>
-            <li>Pick an organization and repository, with ★ favourites</li>
-            <li>See open and closed PRs with CI status and review state</li>
-            <li>Open a PR for checks, error annotations, reviews, commits and comments</li>
-            <li>View changed files and diffs</li>
-            <li>Approve, comment, request changes and merge</li>
-            <li>Install it to your home screen like an app</li>
-          </ul>
-        </details>
       </div>
     </section>
 
