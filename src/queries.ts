@@ -17,6 +17,9 @@ export interface CheckContext {
   status?: string;
   conclusion?: string | null;
   detailsUrl?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  checkSuite?: { workflowRun: { event: string; workflow: { name: string } } | null } | null;
   // StatusContext
   context?: string;
   state?: string;
@@ -104,7 +107,10 @@ const PR_FIELDS = `
               totalCount
               nodes {
                 __typename
-                ... on CheckRun { name status conclusion detailsUrl }
+                ... on CheckRun {
+                  name status conclusion detailsUrl startedAt completedAt
+                  checkSuite { workflowRun { event workflow { name } } }
+                }
                 ... on StatusContext { context state targetUrl }
               }
             }
@@ -190,22 +196,10 @@ export async function searchPullRequests(scope: string, state: 'open' | 'closed'
 
 // ---------- PR details (opened from a card) ----------
 
-export interface DetailCheck {
-  __typename: 'CheckRun' | 'StatusContext';
+export interface DetailCheck extends CheckContext {
   id: string;
-  // CheckRun
-  name?: string;
-  status?: string;
-  conclusion?: string | null;
-  startedAt?: string | null;
-  completedAt?: string | null;
-  detailsUrl?: string | null;
-  checkSuite?: { workflowRun: { workflow: { name: string } } | null } | null;
   // StatusContext
-  context?: string;
-  state?: string;
   description?: string | null;
-  targetUrl?: string | null;
   createdAt?: string;
 }
 
@@ -262,7 +256,7 @@ export async function fetchPullRequestDetail(id: string): Promise<PullRequestDet
                       __typename
                       ... on CheckRun {
                         id name status conclusion startedAt completedAt detailsUrl
-                        checkSuite { workflowRun { workflow { name } } }
+                        checkSuite { workflowRun { event workflow { name } } }
                       }
                       ... on StatusContext { id context state description targetUrl createdAt }
                     }
@@ -408,23 +402,59 @@ export interface CheckSummary {
   items: Array<{ name: string; url: string | null; bucket: CheckBucket; fromCheckRun?: boolean }>;
 }
 
+const checkName = (c: CheckContext): string => (c.__typename === 'CheckRun' ? c.name : c.context) ?? '';
+
+/**
+ * The checks GitHub shows for a commit. The rollup also keeps runs that a re-run superseded
+ * (same name, workflow and event), so keep only the newest of each.
+ */
+export function latestChecks<T extends CheckContext>(nodes: T[]): T[] {
+  const latest = new Map<string, T>();
+  for (const c of nodes) {
+    const run = c.checkSuite?.workflowRun;
+    const key = [c.__typename, run?.workflow.name ?? '', run?.event ?? '', checkName(c)].join('\u0000');
+    const prev = latest.get(key);
+    if (!prev || (c.startedAt ?? c.completedAt ?? '') >= (prev.startedAt ?? prev.completedAt ?? '')) latest.set(key, c);
+  }
+  return [...latest.values()];
+}
+
+/** Checks of a rollup: latest runs only, plus how many more exist beyond the fetched page. */
+export function rollupChecks<T extends CheckContext>(contexts: { totalCount: number; nodes: T[] } | undefined): { checks: T[]; more: number } {
+  if (!contexts) return { checks: [], more: 0 };
+  return { checks: latestChecks(contexts.nodes), more: Math.max(0, contexts.totalCount - contexts.nodes.length) };
+}
+
+export const BUCKET_ORDER: Record<CheckBucket, number> = { fail: 0, pending: 1, pass: 2, skipped: 3 };
+
+export function emptySummary(): CheckSummary {
+  return { total: 0, pass: 0, fail: 0, pending: 0, skipped: 0, overall: 'none', items: [] };
+}
+
+export function addCheck(s: CheckSummary, item: CheckSummary['items'][number]): void {
+  s[item.bucket]++;
+  s.total++;
+  s.items.push(item);
+}
+
+/** Overall state and failures-first order, once all checks are added. */
+export function finishSummary(s: CheckSummary, more = 0): CheckSummary {
+  s.total += more;
+  s.overall = s.fail ? 'fail' : s.pending ? 'pending' : s.pass || s.skipped ? 'pass' : 'none';
+  s.items.sort((a, b) => BUCKET_ORDER[a.bucket] - BUCKET_ORDER[b.bucket] || a.name.localeCompare(b.name));
+  return s;
+}
+
 export function summarizeChecks(pr: PullRequest): CheckSummary {
-  const rollup = pr.commits.nodes[0]?.commit.statusCheckRollup;
-  const s: CheckSummary = { total: 0, pass: 0, fail: 0, pending: 0, skipped: 0, overall: 'none', items: [] };
-  if (!rollup) return s;
-  for (const c of rollup.contexts.nodes) {
-    const bucket = checkBucket(c);
-    s[bucket]++;
-    s.items.push({
-      name: c.__typename === 'CheckRun' ? c.name ?? 'check' : c.context ?? 'status',
+  const { checks, more } = rollupChecks(pr.commits.nodes[0]?.commit.statusCheckRollup?.contexts);
+  const s = emptySummary();
+  for (const c of checks) {
+    addCheck(s, {
+      name: checkName(c) || (c.__typename === 'CheckRun' ? 'check' : 'status'),
       url: (c.__typename === 'CheckRun' ? c.detailsUrl : c.targetUrl) ?? null,
-      bucket,
+      bucket: checkBucket(c),
       fromCheckRun: c.__typename === 'CheckRun',
     });
   }
-  s.total = rollup.contexts.totalCount;
-  s.overall = s.fail ? 'fail' : s.pending ? 'pending' : rollup.state === 'SUCCESS' || s.pass ? 'pass' : 'pending';
-  const order: Record<CheckBucket, number> = { fail: 0, pending: 1, pass: 2, skipped: 3 };
-  s.items.sort((a, b) => order[a.bucket] - order[b.bucket] || a.name.localeCompare(b.name));
-  return s;
+  return finishSummary(s, more);
 }
