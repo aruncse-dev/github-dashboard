@@ -111,7 +111,8 @@ interface GraphQLResponse<T> {
 
 /**
  * GitHub returns `null` in a connection's `nodes` for items the token may not read
- * (e.g. check runs for fine-grained tokens). Drop them and keep `totalCount` in step.
+ * (e.g. check runs for fine-grained tokens). Drop them, keep `totalCount` in step and
+ * record how many were dropped in `hiddenCount`.
  */
 function dropHidden<T>(value: T): T {
   if (Array.isArray(value)) return value.map(dropHidden) as T;
@@ -123,6 +124,7 @@ function dropHidden<T>(value: T): T {
       obj.nodes = obj.nodes.filter((n) => n !== null);
       const hidden = before - (obj.nodes as unknown[]).length;
       if (hidden && typeof obj.totalCount === 'number') obj.totalCount = Math.max(0, obj.totalCount - hidden);
+      if (hidden) obj.hiddenCount = hidden;
     }
   }
   return value;

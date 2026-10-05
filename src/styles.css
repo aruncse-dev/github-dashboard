@@ -356,6 +356,8 @@ button.st:hover { text-decoration: underline; }
 .d-more summary { cursor: pointer; color: var(--accent); font-size: 12px; margin-bottom: 6px; }
 .d-link { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
 .d-link .octicon { width: 12px; height: 12px; }
+.d-hidden { margin: 0; display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; }
+.d-hidden .octicon { width: 14px; height: 14px; }
 .d-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; font-size: 13px; min-width: 0; }
 .d-row + .d-row { border-top: 1px solid var(--border-muted); }
 .d-row > span:nth-child(2) { flex: 1; min-width: 0; }

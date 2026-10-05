@@ -3,7 +3,7 @@ import {
   type MergeMethod, type RestFile, type RestPull, type ReviewEvent,
 } from './api';
 import {
-  addCheck, checkBucket, fetchCheckRunDetail, finishSummary, rollupChecks, BUCKET_ORDER, fetchLabels, fetchMergeSettings, fetchPullRequest, fetchPullRequestDetail, fetchRecentRepos, fetchViewer, searchRepos, tokenRepos, searchPullRequests, summarizeChecks,
+  addCheck, checkBucket, hiddenState, fetchCheckRunDetail, finishSummary, rollupChecks, BUCKET_ORDER, fetchLabels, fetchMergeSettings, fetchPullRequest, fetchPullRequestDetail, fetchRecentRepos, fetchViewer, searchRepos, tokenRepos, searchPullRequests, summarizeChecks,
   type CheckBucket, type CheckRunDetail, type DetailCheck, type PullRequest, type PullRequestDetail, type Repo, type Viewer,
 } from './queries';
 import {
@@ -182,7 +182,7 @@ async function loadPrs(reset: boolean): Promise<void> {
   try {
     const res = await searchPullRequests(searchScope(), state.tab, reset ? null : state.cursor);
     if (seq !== state.loadSeq) return; // a newer request superseded this one
-    state.prs = reset ? res.prs : [...state.prs, ...res.prs];
+    state.prs = sortByNumber(reset ? res.prs : [...state.prs, ...res.prs]);
     state.cursor = res.endCursor;
     state.hasMore = res.hasNextPage;
     state.counts = { open: res.openCount, closed: res.closedCount };
@@ -200,16 +200,27 @@ async function loadPrs(reset: boolean): Promise<void> {
   }
 }
 
+/** Highest PR number first (per repository), whatever order search returned. */
+function sortByNumber(prs: PullRequest[]): PullRequest[] {
+  const repo = (p: PullRequest) => `${p.repository.owner.login}/${p.repository.name}`;
+  return [...prs].sort((a, b) => repo(a).localeCompare(repo(b)) || b.number - a.number);
+}
+
 /** Actions jobs of each open PR's head commit, so cards count the same checks as PR details. */
 async function loadJobs(seq: number): Promise<void> {
   const prs = state.prs.filter((pr) => {
     const sha = pr.commits.nodes[0]?.commit.oid;
     return pr.state === 'OPEN' && sha && !state.jobs.has(sha);
   });
-  const results = await Promise.all(prs.map((pr) =>
-    actionsForCommit(pr.repository.owner.login, pr.repository.name, pr.commits.nodes[0].commit.oid)
-      .then((a) => [pr.commits.nodes[0].commit.oid, a.jobs] as const)
-      .catch(() => null))); // no "Actions: Read": cards show commit statuses only
+  // A few PRs at a time: each needs one request plus one per workflow run.
+  const results: Array<readonly [string, Job[]] | null> = [];
+  for (let i = 0; i < prs.length; i += 4) {
+    results.push(...await Promise.all(prs.slice(i, i + 4).map((pr) =>
+      actionsForCommit(pr.repository.owner.login, pr.repository.name, pr.commits.nodes[0].commit.oid)
+        .then((a) => [pr.commits.nodes[0].commit.oid, a.jobs] as const)
+        .catch(() => null)))); // no "Actions: Read": cards show commit statuses only
+    if (seq !== state.loadSeq) return;
+  }
   if (seq !== state.loadSeq) return;
   let changed = false;
   for (const r of results) {
@@ -231,10 +242,16 @@ function ciSummary(pr: PullRequest): CheckSummary {
   const s = summarizeChecks(pr);
   const sha = pr.commits.nodes[0]?.commit.oid;
   const jobs = extraJobs((sha && state.jobs.get(sha)) || [], s.items.map((i) => i.runId));
-  if (!jobs.length) return s;
   for (const j of jobs) addCheck(s, { name: j.name, url: j.html_url, bucket: actionsBucket(j.status, j.conclusion), fromCheckRun: true });
-  return finishSummary(s);
+  if (jobs.length) finishSummary(s);
+  const rollup = pr.commits.nodes[0]?.commit.statusCheckRollup;
+  s.hiddenState = hiddenState(s, rollup?.state, rollup?.contexts.hiddenCount ?? 0);
+  if (s.hiddenState === 'fail') s.overall = 'fail';
+  else if (s.hiddenState === 'pending' && s.overall !== 'fail') s.overall = 'pending';
+  return s;
 }
+
+const HIDDEN_HINT = 'Fine-grained tokens can’t read checks from GitHub Apps (e.g. Semgrep). Open the PR on GitHub to see them.';
 
 function showListError(e: unknown): void {
   const box = $('#listError');
@@ -295,6 +312,14 @@ function checksStatus(pr: PullRequest): string {
   const s = ciSummary(pr);
   if (s.overall === 'none') return '';
   const attrs = `type="button" class="st" data-act="details" data-section="checks" data-id="${esc(pr.id)}"`;
+  if (s.hiddenState === 'fail' && !s.fail) {
+    const label = `A check this token can’t read is failing. ${HIDDEN_HINT}`;
+    return `<button ${attrs} title="${label}" aria-label="${label}"><span class="c-fail">${icon('x')}?/${s.total || '?'}</span></button>`;
+  }
+  if (s.hiddenState === 'pending' && !s.pending) {
+    const label = `A check this token can’t read is still running. ${HIDDEN_HINT}`;
+    return `<button ${attrs} title="${label}" aria-label="${label}"><span class="c-pending">${icon('dot', 'pulse')}?/${s.total || '?'}</span></button>`;
+  }
   if (s.overall === 'fail') return `<button ${attrs} title="${s.fail} of ${s.total} checks failed" aria-label="${s.fail} of ${s.total} checks failed"><span class="c-fail">${icon('x')}${s.fail}/${s.total}</span></button>`;
   if (s.overall === 'pending') return `<button ${attrs} title="${s.pending} of ${s.total} checks running" aria-label="${s.pending} of ${s.total} checks running"><span class="c-pending">${icon('dot', 'pulse')}${s.pending}/${s.total}</span></button>`;
   // Skipped checks don't block, as on GitHub ("2 successful, 1 skipped").
@@ -444,9 +469,12 @@ function detailChecks(d: PullRequestDetail): DetailCheck[] {
 }
 
 const hasCheckRuns = (d: PullRequestDetail) => detailChecks(d).some((c) => c.__typename === 'CheckRun');
+/** Actions jobs shown in the sheet: those not already listed as a readable check run. */
+const detailJobs = (d: PullRequestDetail) => extraJobs(detail.actions?.jobs ?? [], detailChecks(d).map((c) => c.databaseId));
+
 const hasPendingChecks = (d: PullRequestDetail) =>
   detailChecks(d).some((c) => checkBucket(c) === 'pending') ||
-  !!detail.actions?.jobs.some((j) => actionsBucket(j.status, j.conclusion) === 'pending');
+  detailJobs(d).some((j) => actionsBucket(j.status, j.conclusion) === 'pending');
 
 async function loadActions(d: PullRequestDetail): Promise<void> {
   const sha = d.commits.nodes[0]?.commit.oid;
@@ -593,7 +621,7 @@ function renderDetails(): void {
   } else {
     // Checks
     const checks = detailChecks(d);
-    const jobs = sortJobs(extraJobs(detail.actions?.jobs ?? [], checks.map((c) => c.databaseId)));
+    const jobs = sortJobs(detailJobs(d));
     const more = detailRollup(d).more;
     const total = checks.length + jobs.length + more;
     const counts: Record<CheckBucket, number> = { pass: 0, fail: 0, pending: 0, skipped: 0 };
@@ -628,6 +656,16 @@ function renderDetails(): void {
     const rows = [...checkRows, ...jobRows].sort((a, b) => BUCKET_ORDER[a.bucket] - BUCKET_ORDER[b.bucket]).map((r) => r.html).join('');
     const actionsNote = detail.actions?.loading ? spinnerHtml('Loading GitHub Actions…')
       : detail.actions?.error ? `<p class="d-muted">${esc(detail.actions.error)}</p>` : '';
+    // Check runs the token can't read: say so, and whether GitHub reports them failing or running.
+    const { hidden } = detailRollup(d);
+    const hiddenNow = hiddenState(counts, d.checks.nodes[0]?.commit.statusCheckRollup?.state, hidden);
+    const hiddenNote = !hidden ? '' : `
+      ${hiddenNow === 'fail' ? `<p class="d-hidden c-fail">${icon('x')} GitHub reports a failing check that this token can’t read.</p>`
+        : hiddenNow === 'pending' ? `<p class="d-hidden c-pending">${icon('dot', 'pulse')} GitHub reports a running check that this token can’t read.</p>` : ''}
+      <p class="d-muted">${isFineGrained()
+        ? 'Fine-grained tokens can’t read checks created by GitHub Apps (e.g. Semgrep), and GitHub offers no permission that allows it. GitHub Actions jobs and commit statuses are shown. Use a classic token (repo scope) to see every check.'
+        : 'Some checks aren’t readable with this token.'}
+        <a class="d-link" href="${safeUrl(`${pr.url}/checks`)}" target="_blank" rel="noopener noreferrer">All checks on GitHub ${icon('ext')}</a></p>`;
     parts.push(`
       <section class="d-section" id="detailChecks">
         <div class="d-head">
@@ -636,8 +674,8 @@ function renderDetails(): void {
         </div>
         ${checks.length || jobs.length
           ? `<p class="d-counts">${countText}${hasPendingChecks(d) ? ' <span class="d-muted">· auto-refreshing</span>' : ''}</p><div class="d-list">${rows}</div>`
-          : detail.actions?.loading ? '' : '<p class="d-muted">No checks reported for the latest commit.</p>'}
-        ${actionsNote}
+          : detail.actions?.loading || hidden ? '' : '<p class="d-muted">No checks reported for the latest commit.</p>'}
+        ${actionsNote}${hiddenNote}
         ${more ? `<p class="d-muted">+${more} more checks not shown</p>` : ''}
       </section>`);
 
@@ -1366,7 +1404,7 @@ async function runDiagnostics(): Promise<void> {
       // Fine-grained tokens have no "Checks" permission; the app reads GitHub Actions via the Actions API.
       const actions = await probe(`${path}/actions/runs?per_page=1`);
       add({ label: 'Can read GitHub Actions runs', ok: actions.ok, detail: actions.ok ? 'OK' : actions.message });
-      if (!actions.ok) hints.push('To show GitHub Actions results, give the token “Actions: Read” (fine-grained tokens can’t read check runs).');
+      if (!actions.ok) hints.push('To show GitHub Actions results, give the token “Actions: Read”. Fine-grained tokens can’t read check runs; checks from GitHub Apps (e.g. Semgrep) need a classic token.');
     } else {
       const runs = await probe(`${path}/commits/${firstPr.head.sha}/check-runs?per_page=1`);
       add({ label: 'Can read check runs', ok: runs.ok, detail: runs.ok ? 'OK' : runs.message });

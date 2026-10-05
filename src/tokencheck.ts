@@ -92,6 +92,7 @@ export async function checkToken(token: string, onProgress: (items: Requirement[
   else if (actions.status === 403) push({ label: 'Actions: Read', status: 'warn', detail: 'Recommended. Without it GitHub Actions results won’t show (fine-grained tokens can’t read check runs).', fix: 'Set “Actions” to Read.' });
   else push({ label: 'Actions: Read', status: 'info', detail: `Couldn’t test on ${repo.full_name} (${actions.message})` });
 
+  if (fine) push({ label: 'Checks from GitHub Apps', status: 'info', detail: 'Not available with fine-grained tokens: GitHub offers no “Checks” permission for them, so checks created by apps such as Semgrep stay hidden. GitHub Actions jobs and commit statuses still show. Use a classic token (repo scope) to see every check.' });
   push({ label: 'Approve / comment', status: 'info', detail: 'Needs “Pull requests: Read and write”. GitHub doesn’t let apps verify write access of fine-grained tokens.' });
   push({ label: 'Merge', status: 'info', detail: 'Needs “Contents: Read and write” (only if you merge from the app).' });
   return done();

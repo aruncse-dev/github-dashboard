@@ -66,7 +66,7 @@
                 <tr><td>Contents</td><td>Read &amp; write</td><td><span class="Label">To merge</span></td></tr>
               </tbody>
             </table>
-            <p class="d-muted">Metadata: Read is added automatically. Fine-grained tokens have no “Checks” permission, so GitHub Actions results come through Actions: Read. If your organization approves fine-grained tokens, an org owner must approve it first.</p>
+            <p class="d-muted">Metadata: Read is added automatically. Fine-grained tokens have no “Checks” permission (GitHub doesn’t offer one), so GitHub Actions jobs come through Actions: Read and external CI through Commit statuses. Checks created by other GitHub Apps (e.g. Semgrep) can’t be shown; use a classic token for those. If your organization approves fine-grained tokens, an org owner must approve it first.</p>
             <a class="btn btn-sm" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer"><span data-icon="ext"></span>Create fine-grained token</a>
           </div>
 
