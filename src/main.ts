@@ -3,7 +3,7 @@ import {
   type MergeMethod, type RestFile, type RestPull, type ReviewEvent,
 } from './api';
 import {
-  checkBucket, fetchCheckRunDetail, fetchLabels, fetchMergeSettings, fetchPullRequest, fetchPullRequestDetail, fetchRecentRepos, fetchViewer, searchRepos, tokenRepos, searchPullRequests, summarizeChecks,
+  addCheck, checkBucket, fetchCheckRunDetail, finishSummary, rollupChecks, BUCKET_ORDER, fetchLabels, fetchMergeSettings, fetchPullRequest, fetchPullRequestDetail, fetchRecentRepos, fetchViewer, searchRepos, tokenRepos, searchPullRequests, summarizeChecks,
   type CheckBucket, type CheckRunDetail, type DetailCheck, type PullRequest, type PullRequestDetail, type Repo, type Viewer,
 } from './queries';
 import {
@@ -11,7 +11,7 @@ import {
 } from './ui';
 import { favorites } from './favorites';
 import { checkToken, type Requirement } from './tokencheck';
-import { actionsBucket, actionsForCommit, actionsText, runsByCommit, type Job, type WorkflowRun } from './actions';
+import { actionsBucket, actionsForCommit, actionsText, type Job, type WorkflowRun } from './actions';
 import type { CheckSummary } from './queries';
 import { cache } from './cache';
 import { renderGitHubHtml } from './markdown';
@@ -38,8 +38,8 @@ const state = {
   counts: { open: 0, closed: 0 },
   loadSeq: 0,
   current: null as PullRequest | null,
-  /** GitHub Actions runs by commit, for fine-grained tokens (they can't read check runs). */
-  runs: null as Map<string, WorkflowRun[]> | null,
+  /** GitHub Actions jobs by commit, for fine-grained tokens (they can't read check runs). */
+  jobs: new Map<string, Job[]>(),
 };
 
 const CHIP_QUALIFIERS: Record<string, string> = {
@@ -187,7 +187,8 @@ async function loadPrs(reset: boolean): Promise<void> {
     state.hasMore = res.hasNextPage;
     state.counts = { open: res.openCount, closed: res.closedCount };
     renderList();
-    if (reset && isFineGrained()) void loadRuns(seq);
+    if (reset) state.jobs.clear();
+    if (isFineGrained()) void loadJobs(seq);
   } catch (e) {
     if (seq !== state.loadSeq) return;
     if (e instanceof GitHubError && e.status === 401) {
@@ -199,34 +200,39 @@ async function loadPrs(reset: boolean): Promise<void> {
   }
 }
 
-/** One request for the repo's recent Actions runs; cards then show their CI status. */
-async function loadRuns(seq: number): Promise<void> {
-  state.runs = null;
-  if (!state.repo) return;
-  try {
-    const runs = await runsByCommit(state.owner, state.repo);
-    if (seq !== state.loadSeq) return;
-    state.runs = runs;
-    renderList();
-  } catch {
-    /* no "Actions: Read": cards show commit statuses only */
+/** Actions jobs of each open PR's head commit, so cards count the same checks as PR details. */
+async function loadJobs(seq: number): Promise<void> {
+  const prs = state.prs.filter((pr) => {
+    const sha = pr.commits.nodes[0]?.commit.oid;
+    return pr.state === 'OPEN' && sha && !state.jobs.has(sha) && !summarizeChecks(pr).items.some((i) => i.fromCheckRun);
+  });
+  const results = await Promise.all(prs.map((pr) =>
+    actionsForCommit(pr.repository.owner.login, pr.repository.name, pr.commits.nodes[0].commit.oid)
+      .then((a) => [pr.commits.nodes[0].commit.oid, a.jobs] as const)
+      .catch(() => null))); // no "Actions: Read": cards show commit statuses only
+  if (seq !== state.loadSeq) return;
+  let changed = false;
+  for (const r of results) {
+    if (!r) continue;
+    state.jobs.set(r[0], r[1]);
+    changed ||= r[1].length > 0;
   }
+  if (changed) renderList();
 }
 
-/** Check summary for a card: GraphQL rollup, plus Actions runs when check runs are unreadable. */
+/** Adds GitHub Actions jobs (one check each on GitHub) to a summary. */
+function withJobs(s: CheckSummary, jobs: Job[]): CheckSummary {
+  for (const j of jobs) addCheck(s, { name: j.name, url: j.html_url, bucket: actionsBucket(j.status, j.conclusion), fromCheckRun: true });
+  return finishSummary(s);
+}
+
+/** Check summary for a card: GraphQL rollup, plus Actions jobs when check runs are unreadable. */
 function ciSummary(pr: PullRequest): CheckSummary {
   const s = summarizeChecks(pr);
   const sha = pr.commits.nodes[0]?.commit.oid;
-  const runs = sha ? state.runs?.get(sha) : undefined;
-  if (!runs?.length || s.items.some((i) => i.fromCheckRun)) return s;
-  for (const r of runs) {
-    const bucket = actionsBucket(r.status, r.conclusion);
-    s[bucket]++;
-    s.total++;
-    s.items.push({ name: r.name ?? 'workflow', url: r.html_url, bucket, fromCheckRun: true });
-  }
-  s.overall = s.fail ? 'fail' : s.pending ? 'pending' : s.pass ? 'pass' : 'none';
-  return s;
+  const jobs = sha ? state.jobs.get(sha) : undefined;
+  if (!jobs?.length || s.items.some((i) => i.fromCheckRun)) return s;
+  return withJobs(s, jobs);
 }
 
 function showListError(e: unknown): void {
@@ -290,7 +296,10 @@ function checksStatus(pr: PullRequest): string {
   const attrs = `type="button" class="st" data-act="details" data-section="checks" data-id="${esc(pr.id)}"`;
   if (s.overall === 'fail') return `<button ${attrs} title="${s.fail} of ${s.total} checks failed" aria-label="${s.fail} of ${s.total} checks failed"><span class="c-fail">${icon('x')}${s.fail}/${s.total}</span></button>`;
   if (s.overall === 'pending') return `<button ${attrs} title="${s.pending} of ${s.total} checks running" aria-label="${s.pending} of ${s.total} checks running"><span class="c-pending">${icon('dot', 'pulse')}${s.pending}/${s.total}</span></button>`;
-  return `<button ${attrs} title="${s.pass} of ${s.total} checks passed" aria-label="${s.pass} of ${s.total} checks passed"><span class="c-pass">${icon('check')}${s.pass}/${s.total}</span></button>`;
+  // Skipped checks don't block, as on GitHub ("2 successful, 1 skipped").
+  const ok = s.pass + s.skipped;
+  const label = `${s.pass} of ${s.total} checks passed${s.skipped ? `, ${s.skipped} skipped` : ''}`;
+  return `<button ${attrs} title="${label}" aria-label="${label}"><span class="c-pass">${icon('check')}${ok}/${s.total}</span></button>`;
 }
 
 /** Compact review status for cards. */
@@ -426,11 +435,11 @@ const BUCKET_ICON: Record<CheckBucket, string> = {
   skipped: icon('skip', 'c-skipped'),
 };
 
+const detailRollup = (d: PullRequestDetail) => rollupChecks(d.checks.nodes[0]?.commit.statusCheckRollup?.contexts);
+
 function detailChecks(d: PullRequestDetail): DetailCheck[] {
-  const order: Record<CheckBucket, number> = { fail: 0, pending: 1, pass: 2, skipped: 3 };
-  const nodes = d.checks.nodes[0]?.commit.statusCheckRollup?.contexts.nodes ?? [];
   const name = (c: DetailCheck) => (c.__typename === 'CheckRun' ? c.name : c.context) ?? '';
-  return [...nodes].sort((a, b) => order[checkBucket(a)] - order[checkBucket(b)] || name(a).localeCompare(name(b)));
+  return detailRollup(d).checks.sort((a, b) => BUCKET_ORDER[checkBucket(a)] - BUCKET_ORDER[checkBucket(b)] || name(a).localeCompare(name(b)));
 }
 
 const hasCheckRuns = (d: PullRequestDetail) => detailChecks(d).some((c) => c.__typename === 'CheckRun');
@@ -445,6 +454,9 @@ async function loadActions(d: PullRequestDetail): Promise<void> {
   try {
     const { runs, jobs } = await actionsForCommit(ownerOf(d), repoOf(d), sha);
     detail.actions = { loading: false, error: '', runs, jobs };
+    // Keep the card's count in step with what the sheet shows.
+    state.jobs.set(sha, jobs);
+    renderList();
   } catch (e) {
     const forbidden = e instanceof GitHubError && (e.status === 403 || e.status === 404);
     detail.actions = { loading: false, runs: [], jobs: [],
@@ -580,7 +592,8 @@ function renderDetails(): void {
     // Checks
     const checks = detailChecks(d);
     const jobs = hasCheckRuns(d) ? [] : sortJobs(detail.actions?.jobs ?? []);
-    const total = (d.checks.nodes[0]?.commit.statusCheckRollup?.contexts.totalCount ?? 0) + jobs.length;
+    const more = detailRollup(d).more;
+    const total = checks.length + jobs.length + more;
     const counts: Record<CheckBucket, number> = { pass: 0, fail: 0, pending: 0, skipped: 0 };
     for (const c of checks) counts[checkBucket(c)]++;
     for (const j of jobs) counts[actionsBucket(j.status, j.conclusion)]++;
@@ -591,7 +604,6 @@ function renderDetails(): void {
       counts.skipped && `<span class="c-muted">${counts.skipped} skipped</span>`,
     ].filter(Boolean).join(' · ');
     // Status contexts and Actions jobs in one list, failures first.
-    const order: Record<CheckBucket, number> = { fail: 0, pending: 1, pass: 2, skipped: 3 };
     const checkRows = checks.map((c) => ({ bucket: checkBucket(c), html: (() => {
       const st = checkStatus(c);
       const isRun = c.__typename === 'CheckRun';
@@ -611,7 +623,7 @@ function renderDetails(): void {
         </div>`;
     })() }));
     const jobRows = jobs.map((j) => ({ bucket: actionsBucket(j.status, j.conclusion), html: jobRow(j) }));
-    const rows = [...checkRows, ...jobRows].sort((a, b) => order[a.bucket] - order[b.bucket]).map((r) => r.html).join('');
+    const rows = [...checkRows, ...jobRows].sort((a, b) => BUCKET_ORDER[a.bucket] - BUCKET_ORDER[b.bucket]).map((r) => r.html).join('');
     const actionsNote = detail.actions?.loading ? spinnerHtml('Loading GitHub Actions…')
       : detail.actions?.error ? `<p class="d-muted">${esc(detail.actions.error)}</p>` : '';
     parts.push(`
@@ -624,7 +636,7 @@ function renderDetails(): void {
           ? `<p class="d-counts">${countText}${hasPendingChecks(d) ? ' <span class="d-muted">· auto-refreshing</span>' : ''}</p><div class="d-list">${rows}</div>`
           : detail.actions?.loading ? '' : '<p class="d-muted">No checks reported for the latest commit.</p>'}
         ${actionsNote}
-        ${total > checks.length + jobs.length ? `<p class="d-muted">+${total - checks.length - jobs.length} more checks not shown</p>` : ''}
+        ${more ? `<p class="d-muted">+${more} more checks not shown</p>` : ''}
       </section>`);
 
     // Reviews
@@ -702,8 +714,7 @@ function renderDetails(): void {
 }
 
 function sortJobs(jobs: Job[]): Job[] {
-  const order: Record<CheckBucket, number> = { fail: 0, pending: 1, pass: 2, skipped: 3 };
-  return [...jobs].sort((a, b) => order[actionsBucket(a.status, a.conclusion)] - order[actionsBucket(b.status, b.conclusion)] || a.name.localeCompare(b.name));
+  return [...jobs].sort((a, b) => BUCKET_ORDER[actionsBucket(a.status, a.conclusion)] - BUCKET_ORDER[actionsBucket(b.status, b.conclusion)] || a.name.localeCompare(b.name));
 }
 
 function span(start: string | null, end: string | null): string {

@@ -8,10 +8,12 @@ export interface WorkflowRun {
   id: number;
   name: string | null;
   workflow_id: number;
+  event: string;
   head_sha: string;
   status: string; // queued | in_progress | completed | waiting | requested | pending
   conclusion: string | null;
   run_number: number;
+  run_attempt?: number;
   html_url: string;
   created_at: string;
 }
@@ -62,28 +64,35 @@ export function actionsText(status: string, conclusion: string | null): string {
     neutral: 'Neutral', action_required: 'Action required', startup_failure: 'Startup failure', stale: 'Stale' } as Record<string, string>)[conclusion ?? ''] ?? 'Done';
 }
 
-/** Keep only the newest run of each workflow (re-runs replace earlier ones). */
+/** Keep only the newest run of each workflow and event (re-runs replace earlier ones), as GitHub's checks list does. */
 export function latestPerWorkflow(runs: WorkflowRun[]): WorkflowRun[] {
-  const byWorkflow = new Map<number, WorkflowRun>();
+  const byWorkflow = new Map<string, WorkflowRun>();
   for (const r of runs) {
-    const prev = byWorkflow.get(r.workflow_id);
-    if (!prev || r.run_number > prev.run_number || (r.run_number === prev.run_number && r.created_at > prev.created_at)) byWorkflow.set(r.workflow_id, r);
+    const key = `${r.workflow_id}:${r.event}`;
+    const prev = byWorkflow.get(key);
+    if (!prev || r.run_number > prev.run_number || (r.run_number === prev.run_number && r.created_at > prev.created_at)) byWorkflow.set(key, r);
   }
   return [...byWorkflow.values()];
 }
 
-/** Recent runs of a repository grouped by commit SHA (one request, used for the PR cards). */
-export async function runsByCommit(owner: string, repo: string): Promise<Map<string, WorkflowRun[]>> {
-  const res = await rest.workflowRuns(owner, repo, '');
-  const map = new Map<string, WorkflowRun[]>();
-  for (const r of res.workflow_runs) map.set(r.head_sha, [...(map.get(r.head_sha) ?? []), r]);
-  for (const [sha, runs] of map) map.set(sha, latestPerWorkflow(runs));
-  return map;
+/** Jobs of finished run attempts never change, so they are fetched once. */
+const finishedJobs = new Map<string, Job[]>();
+
+async function runJobs(owner: string, repo: string, run: WorkflowRun): Promise<Job[]> {
+  const key = `${owner}/${repo}#${run.id}.${run.run_attempt ?? 1}`;
+  const cached = finishedJobs.get(key);
+  if (cached) return cached;
+  const jobs = (await rest.runJobs(owner, repo, run.id)).jobs;
+  if (run.status === 'completed') finishedJobs.set(key, jobs);
+  return jobs;
 }
 
-/** Runs for one commit and the jobs (with steps) of each: used by the PR details sheet. */
+/**
+ * Runs for one commit and the jobs (with steps) of each. Each job is one check on GitHub,
+ * so cards and the PR details sheet both count jobs.
+ */
 export async function actionsForCommit(owner: string, repo: string, sha: string): Promise<{ runs: WorkflowRun[]; jobs: Job[] }> {
   const runs = latestPerWorkflow((await rest.workflowRuns(owner, repo, sha)).workflow_runs);
-  const jobLists = await Promise.all(runs.map((r) => rest.runJobs(owner, repo, r.id).then((j) => j.jobs).catch(() => [] as Job[])));
+  const jobLists = await Promise.all(runs.map((r) => runJobs(owner, repo, r).catch(() => [] as Job[])));
   return { runs, jobs: jobLists.flat() };
 }
