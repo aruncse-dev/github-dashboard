@@ -204,7 +204,7 @@ async function loadPrs(reset: boolean): Promise<void> {
 async function loadJobs(seq: number): Promise<void> {
   const prs = state.prs.filter((pr) => {
     const sha = pr.commits.nodes[0]?.commit.oid;
-    return pr.state === 'OPEN' && sha && !state.jobs.has(sha) && !summarizeChecks(pr).items.some((i) => i.fromCheckRun);
+    return pr.state === 'OPEN' && sha && !state.jobs.has(sha);
   });
   const results = await Promise.all(prs.map((pr) =>
     actionsForCommit(pr.repository.owner.login, pr.repository.name, pr.commits.nodes[0].commit.oid)
@@ -220,19 +220,20 @@ async function loadJobs(seq: number): Promise<void> {
   if (changed) renderList();
 }
 
-/** Adds GitHub Actions jobs (one check each on GitHub) to a summary. */
-function withJobs(s: CheckSummary, jobs: Job[]): CheckSummary {
-  for (const j of jobs) addCheck(s, { name: j.name, url: j.html_url, bucket: actionsBucket(j.status, j.conclusion), fromCheckRun: true });
-  return finishSummary(s);
+/** Actions jobs not already listed as a readable check run (a job's id is its check run's id). */
+function extraJobs(jobs: Job[], checkRunIds: Array<number | undefined>): Job[] {
+  const seen = new Set(checkRunIds);
+  return jobs.filter((j) => !seen.has(j.id));
 }
 
-/** Check summary for a card: GraphQL rollup, plus Actions jobs when check runs are unreadable. */
+/** Check summary for a card: GraphQL rollup, plus Actions jobs the token can't read as check runs. */
 function ciSummary(pr: PullRequest): CheckSummary {
   const s = summarizeChecks(pr);
   const sha = pr.commits.nodes[0]?.commit.oid;
-  const jobs = sha ? state.jobs.get(sha) : undefined;
-  if (!jobs?.length || s.items.some((i) => i.fromCheckRun)) return s;
-  return withJobs(s, jobs);
+  const jobs = extraJobs((sha && state.jobs.get(sha)) || [], s.items.map((i) => i.runId));
+  if (!jobs.length) return s;
+  for (const j of jobs) addCheck(s, { name: j.name, url: j.html_url, bucket: actionsBucket(j.status, j.conclusion), fromCheckRun: true });
+  return finishSummary(s);
 }
 
 function showListError(e: unknown): void {
@@ -491,7 +492,8 @@ async function loadDetails(focus?: string): Promise<void> {
     if (detail.pr?.id !== pr.id) return;
     detail.data = d;
     detail.error = d ? '' : 'Pull request not found.';
-    if (d && !hasCheckRuns(d)) {
+    // Fine-grained tokens see some check runs (or none); Actions jobs fill in the rest.
+    if (d && (isFineGrained() || !hasCheckRuns(d))) {
       renderDetails();
       await loadActions(d);
       if (detail.pr?.id !== pr.id) return;
@@ -591,7 +593,7 @@ function renderDetails(): void {
   } else {
     // Checks
     const checks = detailChecks(d);
-    const jobs = hasCheckRuns(d) ? [] : sortJobs(detail.actions?.jobs ?? []);
+    const jobs = sortJobs(extraJobs(detail.actions?.jobs ?? [], checks.map((c) => c.databaseId)));
     const more = detailRollup(d).more;
     const total = checks.length + jobs.length + more;
     const counts: Record<CheckBucket, number> = { pass: 0, fail: 0, pending: 0, skipped: 0 };

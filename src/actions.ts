@@ -88,11 +88,23 @@ async function runJobs(owner: string, repo: string, run: WorkflowRun): Promise<J
 }
 
 /**
- * Runs for one commit and the jobs (with steps) of each. Each job is one check on GitHub,
- * so cards and the PR details sheet both count jobs.
+ * Jobs of every run for one commit (each job is one check on GitHub). A commit can have several
+ * runs of one workflow, e.g. jobs still running in one while a newer run waits in "setup", so like
+ * GitHub's checks list keep the newest job per workflow, event and name rather than the newest run.
  */
 export async function actionsForCommit(owner: string, repo: string, sha: string): Promise<{ runs: WorkflowRun[]; jobs: Job[] }> {
-  const runs = latestPerWorkflow((await rest.workflowRuns(owner, repo, sha)).workflow_runs);
-  const jobLists = await Promise.all(runs.map((r) => runJobs(owner, repo, r).catch(() => [] as Job[])));
-  return { runs, jobs: jobLists.flat() };
+  const runs = (await rest.workflowRuns(owner, repo, sha)).workflow_runs;
+  const jobLists = await Promise.all(runs.map((r) => runJobs(owner, repo, r)
+    .then((jobs) => jobs.map((j) => ({ job: j, run: r })))
+    .catch(() => [])));
+  const latest = new Map<string, { job: Job; run: WorkflowRun }>();
+  for (const e of jobLists.flat()) {
+    const key = [e.run.workflow_id, e.run.event, e.job.name].join('\u0000');
+    const prev = latest.get(key);
+    const newer = !prev || e.run.run_number > prev.run.run_number
+      || (e.run.run_number === prev.run.run_number && (e.run.run_attempt ?? 1) > (prev.run.run_attempt ?? 1))
+      || (e.run.id === prev.run.id && e.job.id > prev.job.id);
+    if (newer) latest.set(key, e);
+  }
+  return { runs: latestPerWorkflow(runs), jobs: [...latest.values()].map((e) => e.job) };
 }

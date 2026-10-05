@@ -13,6 +13,8 @@ export type CheckBucket = 'pass' | 'fail' | 'pending' | 'skipped';
 export interface CheckContext {
   __typename: 'CheckRun' | 'StatusContext';
   // CheckRun
+  /** Same as the Actions job id for checks GitHub Actions creates. */
+  databaseId?: number;
   name?: string;
   status?: string;
   conclusion?: string | null;
@@ -108,7 +110,7 @@ const PR_FIELDS = `
               nodes {
                 __typename
                 ... on CheckRun {
-                  name status conclusion detailsUrl startedAt completedAt
+                  databaseId name status conclusion detailsUrl startedAt completedAt
                   checkSuite { workflowRun { event workflow { name } } }
                 }
                 ... on StatusContext { context state targetUrl }
@@ -168,7 +170,8 @@ export interface SearchResult {
 
 /** `scope` is everything except the is:open / is:closed part, e.g. "org:acme review:approved". */
 export async function searchPullRequests(scope: string, state: 'open' | 'closed', after: string | null): Promise<SearchResult> {
-  const q = (s: string) => `is:pr is:${s} archived:false ${scope} sort:updated-desc`;
+  // Newest pull requests first, i.e. by PR number (not by last update).
+  const q = (s: string) => `is:pr is:${s} archived:false ${scope} sort:created-desc`;
   const data = await graphql<{
     open: { issueCount: number };
     closed: { issueCount: number };
@@ -255,7 +258,7 @@ export async function fetchPullRequestDetail(id: string): Promise<PullRequestDet
                     nodes {
                       __typename
                       ... on CheckRun {
-                        id name status conclusion startedAt completedAt detailsUrl
+                        id databaseId name status conclusion startedAt completedAt detailsUrl
                         checkSuite { workflowRun { event workflow { name } } }
                       }
                       ... on StatusContext { id context state description targetUrl createdAt }
@@ -399,7 +402,7 @@ export interface CheckSummary {
   pending: number;
   skipped: number;
   overall: 'pass' | 'fail' | 'pending' | 'none';
-  items: Array<{ name: string; url: string | null; bucket: CheckBucket; fromCheckRun?: boolean }>;
+  items: Array<{ name: string; url: string | null; bucket: CheckBucket; fromCheckRun?: boolean; runId?: number }>;
 }
 
 const checkName = (c: CheckContext): string => (c.__typename === 'CheckRun' ? c.name : c.context) ?? '';
@@ -454,6 +457,7 @@ export function summarizeChecks(pr: PullRequest): CheckSummary {
       url: (c.__typename === 'CheckRun' ? c.detailsUrl : c.targetUrl) ?? null,
       bucket: checkBucket(c),
       fromCheckRun: c.__typename === 'CheckRun',
+      runId: c.databaseId,
     });
   }
   return finishSummary(s, more);
