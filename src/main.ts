@@ -101,6 +101,7 @@ async function boot(): Promise<void> {
   $('#login').classList.add('hidden');
   $('#app').classList.remove('hidden');
   $('#list').innerHTML = '<div class="loading-row"><span class="spinner"></span></div>';
+  $('#listError').classList.add('hidden');
   try {
     // Org list comes from the local cache; "Sync" in the org picker refreshes it.
     const cached = cache.viewer();
@@ -114,6 +115,7 @@ async function boot(): Promise<void> {
       forgetToken();
       return showLogin('Saved token no longer works. Please sign in again.');
     }
+    $('#list').innerHTML = ''; // stop the spinner: the error box says what happened
     return showListError(e);
   }
   const me = state.viewer;
@@ -1489,7 +1491,8 @@ function init(): void {
     showLogin();
   });
 
-  $('#refreshBtn').addEventListener('click', () => void loadPrs(true));
+  // If start-up never got the account (e.g. offline at launch), Refresh retries the whole start-up.
+  $('#refreshBtn').addEventListener('click', () => void (state.viewer ? loadPrs(true) : boot()));
   $('#pickerSync').addEventListener('click', () => void syncPicker());
 
   $('#ownerBtn').addEventListener('click', () => void openPicker('owner'));
