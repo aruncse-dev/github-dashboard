@@ -43,6 +43,13 @@ function describeError(status: number, body: ErrorBody | null): string {
   return msg;
 }
 
+/**
+ * Reads give up after this long. Right after a cold launch the phone's radio is often still waking,
+ * so a request can hang instead of failing; without a limit the list would spin forever.
+ * Merges and reviews are never cut off (they may still go through on GitHub's side).
+ */
+const READ_TIMEOUT_MS = 20_000;
+
 async function request<T>(path: string, init: RequestInit = {}, token: string | null = getToken()): Promise<T> {
   if (!token) throw new GitHubError('No token saved', 401);
   const headers: Record<string, string> = {
@@ -50,15 +57,29 @@ async function request<T>(path: string, init: RequestInit = {}, token: string | 
     Authorization: `Bearer ${token}`,
   };
   if (init.body) headers['Content-Type'] = 'application/json';
-  const res = await fetch(API + path, { ...init, headers, cache: 'no-store' });
-  if (res.status === 204) return undefined as T;
-  const body = await res.json().catch(() => null);
-  if (!res.ok) {
-    const sso = ssoUrl(res);
-    const msg = sso ? `This organization uses SAML SSO. Authorize the token here: ${sso}` : describeError(res.status, body);
-    throw new GitHubError(msg, res.status);
+  // GraphQL is POST but only ever used for queries here.
+  const isRead = !init.method || init.method === 'GET' || path === '/graphql';
+  const ctrl = isRead ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), READ_TIMEOUT_MS) : undefined;
+  try {
+    const res = await fetch(API + path, { ...init, headers, cache: 'no-store', signal: ctrl?.signal });
+    if (res.status === 204) return undefined as T;
+    const body = await res.json().catch(() => null);
+    if (ctrl?.signal.aborted) throw new DOMException('Timed out', 'AbortError');
+    if (!res.ok) {
+      const sso = ssoUrl(res);
+      const msg = sso ? `This organization uses SAML SSO. Authorize the token here: ${sso}` : describeError(res.status, body);
+      throw new GitHubError(msg, res.status);
+    }
+    return body as T;
+  } catch (e) {
+    if (ctrl?.signal.aborted) {
+      throw new GitHubError('GitHub didn’t answer in time. Check your connection, then tap Refresh.', 0);
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
   }
-  return body as T;
 }
 
 /** GitHub sends `X-GitHub-SSO: required; url=…` when the token isn't authorized for an SSO org. */
