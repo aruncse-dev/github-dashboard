@@ -3,12 +3,15 @@ import {
   type MergeMethod, type RestFile, type RestPull, type ReviewEvent,
 } from './api';
 import {
-  addCheck, checkBucket, hiddenState, fetchCheckRunDetail, finishSummary, rollupChecks, BUCKET_ORDER, fetchLabels, fetchMergeSettings, fetchPullRequest, fetchPullRequestDetail, fetchRecentRepos, fetchViewer, searchRepos, tokenRepos, searchPullRequests, summarizeChecks,
+  addCheck, checkBucket, emptySummary, hiddenState, fetchCheckRunDetail, fetchMergeable, finishSummary, rollupChecks, BUCKET_ORDER, fetchLabels, fetchMergeSettings, fetchPullRequest, fetchPullRequestByNumber, fetchPullRequestDetail, fetchRecentRepos, fetchViewer, searchRepos, tokenRepos, searchPullRequests, summarizeChecks,
   type CheckBucket, type CheckRunDetail, type DetailCheck, type PullRequest, type PullRequestDetail, type Repo, type Viewer,
 } from './queries';
 import {
-  $, closeDialog, diffstat, esc, hydrateIcons, icon, initDialogs, isDialogOpen, openDialog, renderPatch, safeUrl, timeAgo, toast, withBusy,
+  $, closeDialog, closeDialogs, diffstat, esc, hydrateIcons, icon, initDialogs, isDialogOpen, openDialog, renderPatch, safeUrl, timeAgo, toast, withBusy,
 } from './ui';
+import { keyChecks, parseTerms, previewMatcher } from './keychecks';
+import { initZoom } from './zoom';
+import { codeView, openBlob } from './code';
 import { favorites } from './favorites';
 import { checkToken, type Requirement } from './tokencheck';
 import { actionsBucket, actionsForCommit, actionsText, type Job, type WorkflowRun } from './actions';
@@ -20,12 +23,17 @@ import { hasIncompleteQualifier, initSuggest, rememberSearch } from './suggest';
 // ---------- State ----------
 
 type Tab = 'open' | 'closed';
+type View = 'prs' | 'code';
 
 const LAST_KEY = 'gh_pr_last_v3';
 storage.remove('gh_pr_last_v2'); // may point at the personal account before org discovery improved
 const THEME_KEY = 'gh_pr_theme';
+const VIEW_KEY = 'gh_pr_view';
 
 const state = {
+  view: (storage.get(VIEW_KEY) === 'code' ? 'code' : 'prs') as View,
+  /** owner/repo the PR list was last loaded for. */
+  prsKey: '',
   viewer: null as Viewer | null,
   owner: '',
   repo: '',
@@ -128,7 +136,8 @@ async function boot(): Promise<void> {
   state.owner = last.owner || favorites.orgs()[0] || me.organizations.nodes[0]?.login || me.login;
   state.repo = last.owner === state.owner && last.repo ? last.repo : await defaultRepo(state.owner);
   saveLast();
-  await loadPrs(true);
+  updateHeader();
+  setView(state.view);
 }
 
 /** First favourite repo of the owner, else its most recently pushed repo. */
@@ -158,7 +167,27 @@ async function selectOwner(owner: string): Promise<void> {
   if (state.owner !== owner) return; // user switched again meanwhile
   state.repo = repo;
   saveLast();
-  await loadPrs(true);
+  reloadView();
+}
+
+// ---------- Views: pull requests | code ----------
+
+const repoKey = () => `${state.owner}/${state.repo}`.toLowerCase();
+
+function setView(view: View): void {
+  state.view = view;
+  storage.set(VIEW_KEY, view);
+  document.querySelectorAll<HTMLElement>('[data-view]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.view === view)));
+  document.querySelectorAll<HTMLElement>('[data-for]').forEach((el) => el.classList.toggle('hidden', el.dataset.for !== view));
+  if (view === 'code') codeView.show();
+  else if (state.prsKey !== repoKey()) void loadPrs(true);
+}
+
+/** Reloads whatever the current view shows (after a repo change or Refresh). */
+function reloadView(): void {
+  updateHeader();
+  if (state.view === 'code') codeView.show(true);
+  else void loadPrs(true);
 }
 
 // ---------- PR list ----------
@@ -173,6 +202,7 @@ function searchScope(): string {
 
 async function loadPrs(reset: boolean): Promise<void> {
   const seq = ++state.loadSeq;
+  state.prsKey = repoKey();
   if (reset) {
     $('#q').dispatchEvent(new Event('suggest:reset'));
     state.cursor = null;
@@ -191,6 +221,7 @@ async function loadPrs(reset: boolean): Promise<void> {
     renderList();
     if (reset) state.jobs.clear();
     if (isFineGrained()) void loadJobs(seq);
+    void recheckMergeable(seq);
   } catch (e) {
     if (seq !== state.loadSeq) return;
     if (e instanceof GitHubError && e.status === 401) {
@@ -244,13 +275,46 @@ function ciSummary(pr: PullRequest): CheckSummary {
   const s = summarizeChecks(pr);
   const sha = pr.commits.nodes[0]?.commit.oid;
   const jobs = extraJobs((sha && state.jobs.get(sha)) || [], s.items.map((i) => i.runId));
-  for (const j of jobs) addCheck(s, { name: j.name, url: j.html_url, bucket: actionsBucket(j.status, j.conclusion), fromCheckRun: true });
+  for (const j of jobs) addCheck(s, { name: j.name, workflow: j.workflow_name, url: j.html_url, bucket: actionsBucket(j.status, j.conclusion), fromCheckRun: true });
   if (jobs.length) finishSummary(s);
   const rollup = pr.commits.nodes[0]?.commit.statusCheckRollup;
   s.hiddenState = hiddenState(s, rollup?.state, rollup?.contexts.hiddenCount ?? 0);
   if (s.hiddenState === 'fail') s.overall = 'fail';
   else if (s.hiddenState === 'pending' && s.overall !== 'fail') s.overall = 'pending';
   return s;
+}
+
+/**
+ * Search results often say UNKNOWN for mergeability: GitHub starts working it out on request.
+ * Ask again a few times so cards can show conflicts.
+ */
+async function recheckMergeable(seq: number, attempt = 0): Promise<void> {
+  const ids = state.prs.filter((p) => p.state === 'OPEN' && p.mergeable === 'UNKNOWN').map((p) => p.id);
+  if (!ids.length || attempt >= 3) return;
+  await new Promise((r) => setTimeout(r, 2500 * (attempt + 1)));
+  if (seq !== state.loadSeq) return;
+  try {
+    const fresh = await fetchMergeable(ids);
+    if (seq !== state.loadSeq) return;
+    let changed = false;
+    for (const p of state.prs) {
+      const m = fresh.get(p.id);
+      if (m && m !== p.mergeable) { p.mergeable = m; changed = true; }
+    }
+    if (changed) renderList();
+  } catch {
+    return;
+  }
+  void recheckMergeable(seq, attempt + 1);
+}
+
+/** Summary of the repository's key checks only, or null when every check counts. */
+function keySummary(pr: PullRequest, all: CheckSummary): CheckSummary | null {
+  const match = keyChecks.matcher(ownerOf(pr), repoOf(pr));
+  if (!match) return null;
+  const k = emptySummary();
+  for (const item of all.items) if (match({ name: item.name, workflow: item.workflow })) addCheck(k, { ...item });
+  return finishSummary(k);
 }
 
 const HIDDEN_HINT = 'See it on GitHub.';
@@ -276,6 +340,7 @@ function updateHeader(): void {
   if (avatar) img.src = avatar;
   img.classList.toggle('hidden', !avatar);
   $('#repoBtnLabel').textContent = state.repo || 'Select…';
+  updateKeyChip();
   document.querySelectorAll<HTMLElement>('.seg [data-tab]').forEach((b) =>
     b.setAttribute('aria-pressed', String(b.dataset.tab === state.tab)));
 }
@@ -314,6 +379,8 @@ function checksStatus(pr: PullRequest): string {
   const s = ciSummary(pr);
   if (s.overall === 'none') return '';
   const attrs = `type="button" class="st" data-act="details" data-section="checks" data-id="${esc(pr.id)}"`;
+  const key = keySummary(pr, s);
+  if (key) return keyChecksStatus(pr, s, key, attrs);
   if (s.hiddenState === 'fail' && !s.fail) {
     const label = `A check this token can’t read is failing. ${HIDDEN_HINT}`;
     return `<button ${attrs} title="${label}" aria-label="${label}"><span class="c-fail">${icon('x')}?/${s.total || '?'}</span></button>`;
@@ -328,6 +395,24 @@ function checksStatus(pr: PullRequest): string {
   const ok = s.pass + s.skipped;
   const label = `${s.pass} of ${s.total} checks passed${s.skipped ? `, ${s.skipped} skipped` : ''}`;
   return `<button ${attrs} title="${label}" aria-label="${label}"><span class="c-pass">${icon('check')}${ok}/${s.total}</span></button>`;
+}
+
+/** Card status counting only the repository's key checks (e.g. "orion-test"). */
+function keyChecksStatus(pr: PullRequest, all: CheckSummary, k: CheckSummary, attrs: string): string {
+  const terms = keyChecks.terms(ownerOf(pr), repoOf(pr)).join(', ');
+  const otherFail = all.fail - k.fail;
+  const others = otherFail > 0 ? `; ${otherFail} other check${otherFail === 1 ? '' : 's'} failed` : '';
+  const btn = (cls: string, ic: string, text: string, label: string) =>
+    `<button ${attrs} title="${esc(label)}" aria-label="${esc(label)}"><span class="${cls}">${ic}${esc(text)}</span>${
+      otherFail > 0 ? `<span class="st-other c-fail">+${otherFail}${icon('x')}</span>` : ''}</button>`;
+  if (!k.total) {
+    const hidden = all.hiddenState ? ' (some checks can’t be read with this token)' : '';
+    return btn('c-muted', icon('dot'), '0/0', `No ${terms} checks on the latest commit yet${hidden}${others}`);
+  }
+  if (k.fail) return btn('c-fail', icon('x'), `${k.fail}/${k.total}`, `${k.fail} of ${k.total} ${terms} checks failed${others}`);
+  if (k.pending) return btn('c-pending', icon('dot', 'pulse'), `${k.pending}/${k.total}`, `${k.pending} of ${k.total} ${terms} checks running${others}`);
+  return btn('c-pass', icon('check'), `${k.pass + k.skipped}/${k.total}`,
+    `${k.pass} of ${k.total} ${terms} checks passed${k.skipped ? `, ${k.skipped} skipped` : ''}${others}`);
 }
 
 /** Compact review status for cards. */
@@ -363,7 +448,8 @@ function prCard(pr: PullRequest): string {
   const status = [
     isOpen ? checksStatus(pr) : '',
     reviewStatus(pr, myReview),
-    isOpen && pr.mergeable === 'CONFLICTING' ? `<span class="st c-pending" title="Has merge conflicts" aria-label="Has merge conflicts">${icon('alert')}</span>` : '',
+    isOpen && pr.mergeable === 'CONFLICTING'
+      ? `<button type="button" class="st" data-act="details" data-section="conflicts" data-id="${esc(pr.id)}" title="Has merge conflicts with ${esc(pr.baseRefName)}"><span class="c-fail">${icon('alert')}Conflicts</span></button>` : '',
   ].join('');
 
   const actions = [
@@ -425,7 +511,87 @@ const detail = {
   showFullBody: false,
   /** GitHub Actions jobs for the head commit (fine-grained tokens can't read check runs). */
   actions: null as { loading: boolean; error: string; runs: WorkflowRun[]; jobs: Job[] } | null,
+  /** Files changed both in the PR and on the base branch since they split. */
+  conflicts: null as ConflictInfo | null,
+  showOthers: false,
+  mergeTries: 0,
 };
+
+interface ConflictInfo {
+  loading: boolean;
+  error: string;
+  /** Commits on the base branch that the PR branch doesn't have. */
+  behind: number;
+  files: string[];
+  /** The base side changed more files than GitHub lists (300). */
+  partial: boolean;
+}
+
+/** Likely conflicting files per PR id + head SHA, also marked in Files changed. */
+const conflictFiles = new Map<string, Set<string>>();
+const conflictKey = (pr: PullRequest) => `${pr.id}@${pr.commits.nodes[0]?.commit.oid ?? ''}`;
+
+/** All file names a PR changes (old names of renamed files too). */
+const prFilesCache = new Map<string, string[]>();
+async function prFileNames(pr: PullRequest): Promise<string[]> {
+  const key = conflictKey(pr);
+  const hit = prFilesCache.get(key);
+  if (hit) return hit;
+  const names: string[] = [];
+  for (let page = 1; page <= 30; page++) {
+    const files = await rest.files(ownerOf(pr), repoOf(pr), pr.number, page);
+    for (const f of files) names.push(f.filename, ...(f.previous_filename ? [f.previous_filename] : []));
+    if (files.length < 100) break;
+  }
+  prFilesCache.set(key, names);
+  return names;
+}
+
+/**
+ * GitHub doesn't say which files conflict. Files changed on both sides since the branch split
+ * are the candidates (compare head...base lists what the base gained meanwhile).
+ */
+async function loadConflicts(d: PullRequestDetail): Promise<void> {
+  const sha = d.commits.nodes[0]?.commit.oid;
+  if (!sha) return;
+  detail.conflicts = { loading: true, error: '', behind: 0, files: [], partial: false };
+  renderDetails();
+  try {
+    const [baseSide, mine] = await Promise.all([rest.compare(ownerOf(d), repoOf(d), sha, d.baseRefName), prFileNames(d)]);
+    if (detail.pr?.id !== d.id) return;
+    const ours = new Set(mine);
+    const files = (baseSide.files ?? [])
+      .filter((f) => ours.has(f.filename) || (f.previous_filename && ours.has(f.previous_filename)))
+      .map((f) => f.filename);
+    conflictFiles.set(conflictKey(d), new Set(files));
+    detail.conflicts = { loading: false, error: '', behind: baseSide.ahead_by, files, partial: (baseSide.files?.length ?? 0) >= 300 };
+  } catch (e) {
+    if (detail.pr?.id !== d.id) return;
+    const denied = e instanceof GitHubError && (e.status === 403 || e.status === 404);
+    detail.conflicts = { loading: false, behind: 0, files: [], partial: false,
+      error: denied ? 'Listing the likely conflicting files needs “Contents: Read” on the token.' : (e as Error).message };
+  }
+  renderDetails();
+}
+
+/** Mergeability is often still UNKNOWN when details first load; ask again shortly. */
+function scheduleMergeCheck(d: PullRequestDetail): void {
+  if (d.state !== 'OPEN' || d.mergeable !== 'UNKNOWN' || detail.mergeTries >= 3) return;
+  detail.mergeTries++;
+  setTimeout(async () => {
+    if (detail.pr?.id !== d.id || !isDialogOpen('#detailSheet')) return;
+    try {
+      const m = (await fetchMergeable([d.id])).get(d.id);
+      if (!m || detail.data?.id !== d.id) return;
+      d.mergeable = m;
+      const card = state.prs.find((p) => p.id === d.id);
+      if (card && card.mergeable !== m) { card.mergeable = m; renderList(); }
+      if (m === 'CONFLICTING') void loadConflicts(d);
+      else if (m === 'UNKNOWN') scheduleMergeCheck(d);
+      renderDetails();
+    } catch { /* keep UNKNOWN */ }
+  }, 2500 * detail.mergeTries);
+}
 
 const AUTO_REFRESH_MS = 15000;
 
@@ -502,6 +668,9 @@ async function openDetails(pr: PullRequest, focus?: string): Promise<void> {
     detail.expanded.clear();
     detail.runs.clear();
     detail.showFullBody = false;
+    detail.conflicts = null;
+    detail.showOthers = false;
+    detail.mergeTries = 0;
   }
   detail.pr = pr;
   detail.error = '';
@@ -522,6 +691,8 @@ async function loadDetails(focus?: string): Promise<void> {
     if (detail.pr?.id !== pr.id) return;
     detail.data = d;
     detail.error = d ? '' : 'Pull request not found.';
+    if (d?.state === 'OPEN' && d.mergeable === 'CONFLICTING' && !detail.conflicts) void loadConflicts(d);
+    if (d) scheduleMergeCheck(d);
     // Fine-grained tokens see some check runs (or none); Actions jobs fill in the rest.
     if (d && (isFineGrained() || !hasCheckRuns(d))) {
       renderDetails();
@@ -535,6 +706,7 @@ async function loadDetails(focus?: string): Promise<void> {
   detail.loading = false;
   renderDetails();
   if (focus === 'checks') document.getElementById('detailChecks')?.scrollIntoView({ block: 'start' });
+  if (focus === 'conflicts') document.getElementById('detailConflicts')?.scrollIntoView({ block: 'start' });
   // Keep running checks fresh while the sheet stays open.
   if (detail.data && hasPendingChecks(detail.data) && isDialogOpen('#detailSheet')) {
     detail.timer = window.setTimeout(() => {
@@ -610,6 +782,9 @@ function renderDetails(): void {
       </div>
       <h3 class="d-title">${esc(pr.title)}</h3>
       <p class="d-meta"><b>${esc(author)}</b> wants to merge <span class="branch">${esc(pr.headRefName)}</span> into <span class="branch">${esc(pr.baseRefName)}</span> · ${esc(opened)}</p>
+      <div class="d-hero-actions">
+        <button class="btn btn-sm" type="button" data-dact="browse" title="Browse every file on this branch">${icon('code')}Browse branch</button>
+      </div>
       ${d ? `<p class="d-stats"><span class="add">+${d.additions}</span> <span class="del">−${d.deletions}</span>
         <span>· ${d.changedFiles} file${d.changedFiles === 1 ? '' : 's'}</span>
         <span>· ${d.commitsCount.totalCount} commit${d.commitsCount.totalCount === 1 ? '' : 's'}</span>
@@ -621,59 +796,72 @@ function renderDetails(): void {
   if (!d) {
     if (!detail.error) parts.push(spinnerHtml('Loading details…'));
   } else {
-    // Checks
+    // Conflicts
+    if (pr.state === 'OPEN' && pr.mergeable === 'CONFLICTING') parts.push(conflictsSection(d));
+
+    // Checks: the repository's key checks first (they decide the card), then the rest.
     const checks = detailChecks(d);
     const jobs = sortJobs(detailJobs(d));
     const more = detailRollup(d).more;
     const total = checks.length + jobs.length + more;
-    const counts: Record<CheckBucket, number> = { pass: 0, fail: 0, pending: 0, skipped: 0 };
-    for (const c of checks) counts[checkBucket(c)]++;
-    for (const j of jobs) counts[actionsBucket(j.status, j.conclusion)]++;
+    const match = keyChecks.matcher(ownerOf(pr), repoOf(pr));
+    // Status contexts and Actions jobs in one list, failures first.
+    const checkRows = checks.map((c) => {
+      const isRun = c.__typename === 'CheckRun';
+      const name = (isRun ? c.name : c.context) ?? 'check';
+      const workflow = isRun ? c.checkSuite?.workflowRun?.workflow.name : null;
+      return { bucket: checkBucket(c), key: !!match?.({ name, workflow }), html: checkRow(c) };
+    });
+    const jobRows = jobs.map((j) => ({ bucket: actionsBucket(j.status, j.conclusion), key: !!match?.({ name: j.name, workflow: j.workflow_name }), html: jobRow(j) }));
+    const allRows = [...checkRows, ...jobRows].sort((a, b) => BUCKET_ORDER[a.bucket] - BUCKET_ORDER[b.bucket]);
+    const mainRows = match ? allRows.filter((r) => r.key) : allRows;
+    const otherRows = match ? allRows.filter((r) => !r.key) : [];
+    const countOf = (rows: typeof allRows) => {
+      const n: Record<CheckBucket, number> = { pass: 0, fail: 0, pending: 0, skipped: 0 };
+      for (const r of rows) n[r.bucket]++;
+      return n;
+    };
+    const counts = countOf(mainRows);
+    const allCounts = countOf(allRows);
     const countText = [
       counts.fail && `<span class="c-fail">${counts.fail} failed</span>`,
       counts.pending && `<span class="c-pending">${counts.pending} running</span>`,
       counts.pass && `<span class="c-pass">${counts.pass} passed</span>`,
       counts.skipped && `<span class="c-muted">${counts.skipped} skipped</span>`,
     ].filter(Boolean).join(' · ');
-    // Status contexts and Actions jobs in one list, failures first.
-    const checkRows = checks.map((c) => ({ bucket: checkBucket(c), html: (() => {
-      const st = checkStatus(c);
-      const isRun = c.__typename === 'CheckRun';
-      const name = (isRun ? c.name : c.context) ?? 'check';
-      const sub = isRun ? c.checkSuite?.workflowRun?.workflow.name : c.description;
-      const open = detail.expanded.has(c.id);
-      return `
-        <div class="d-check${open ? ' open' : ''}">
-          <button class="d-check-row" type="button" data-check="${esc(c.id)}" aria-expanded="${open}">
-            ${BUCKET_ICON[st.bucket]}
-            <span class="d-check-name"><b>${esc(name)}</b>${sub ? `<small>${esc(sub)}</small>` : ''}</span>
-            <span class="d-check-status c-${st.bucket}">${esc(st.text)}${st.time ? `<small>${esc(st.time)}</small>` : ''}</span>
-            ${icon('chev', 'chev')}
-          </button>
-          ${open ? (isRun ? checkRunPanel(c.id, c.detailsUrl)
-            : `<div class="d-check-panel">${c.description ? `<p>${esc(c.description)}</p>` : ''}${c.targetUrl ? `<a class="d-link" href="${safeUrl(c.targetUrl)}" target="_blank" rel="noopener noreferrer">Open details ${icon('ext')}</a>` : '<p class="d-muted">No further details.</p>'}</div>`) : ''}
-        </div>`;
-    })() }));
-    const jobRows = jobs.map((j) => ({ bucket: actionsBucket(j.status, j.conclusion), html: jobRow(j) }));
-    const rows = [...checkRows, ...jobRows].sort((a, b) => BUCKET_ORDER[a.bucket] - BUCKET_ORDER[b.bucket]).map((r) => r.html).join('');
     const actionsNote = detail.actions?.loading ? spinnerHtml('Loading GitHub Actions…')
       : detail.actions?.error ? `<p class="d-muted">${esc(detail.actions.error)}</p>` : '';
     // Check runs the token can't read: say so, and whether GitHub reports them failing or running.
     const { hidden } = detailRollup(d);
-    const hiddenNow = hiddenState(counts, d.checks.nodes[0]?.commit.statusCheckRollup?.state, hidden);
+    const hiddenNow = hiddenState(allCounts, d.checks.nodes[0]?.commit.statusCheckRollup?.state, hidden);
     const hiddenNote = !hidden ? '' : `
       ${hiddenNow === 'fail' ? `<p class="d-hidden c-fail">${icon('x')} GitHub reports a failing check that this token can’t read.</p>`
         : hiddenNow === 'pending' ? `<p class="d-hidden c-pending">${icon('dot', 'pulse')} GitHub reports a running check that this token can’t read.</p>` : ''}
       <p class="d-muted">${isFineGrained() ? 'Checks from GitHub Apps (e.g. Semgrep) need a classic token.' : 'Some checks aren’t readable with this token.'}
         <a class="d-link" href="${safeUrl(`${pr.url}/checks`)}" target="_blank" rel="noopener noreferrer">All checks on GitHub ${icon('ext')}</a></p>`;
+    const terms = keyChecks.terms(ownerOf(pr), repoOf(pr));
+    const keyNote = match ? `<p class="d-muted">Key checks: <b>${esc(terms.join(', '))}</b> · the card counts only these.</p>` : '';
+    const otherFail = allCounts.fail - counts.fail;
+    const others = otherRows.length ? `
+      <details class="d-others"${detail.showOthers ? ' open' : ''}>
+        <summary data-dact="others">${icon('chev', 'chev')}Other checks <span class="Counter">${otherRows.length}</span>
+          ${otherFail ? `<span class="c-fail">${otherFail} failed</span>` : ''}</summary>
+        <div class="d-list">${otherRows.map((r) => r.html).join('')}</div>
+      </details>` : '';
+    const anyChecks = checks.length || jobs.length;
     parts.push(`
       <section class="d-section" id="detailChecks">
         <div class="d-head">
-          <h4>Checks ${total ? `<span class="Counter">${total}</span>` : ''}</h4>
-          <button class="btn btn-sm btn-invisible" type="button" data-dact="refresh" id="detailRefresh" title="Refresh">${icon('sync')}</button>
+          <h4>${match ? 'Key checks' : 'Checks'} ${total ? `<span class="Counter">${match ? mainRows.length : total}</span>` : ''}</h4>
+          <span class="d-head-btns">
+            <button class="btn btn-sm btn-invisible" type="button" data-dact="keys" title="Choose which checks count on the cards">${icon('filter')}Key checks</button>
+            <button class="btn btn-sm btn-invisible" type="button" data-dact="refresh" id="detailRefresh" title="Refresh">${icon('sync')}</button>
+          </span>
         </div>
-        ${checks.length || jobs.length
-          ? `<p class="d-counts">${countText}${hasPendingChecks(d) ? ' <span class="d-muted">· auto-refreshing</span>' : ''}</p><div class="d-list">${rows}</div>`
+        ${keyNote}
+        ${anyChecks
+          ? `${mainRows.length ? `<p class="d-counts">${countText}${hasPendingChecks(d) ? ' <span class="d-muted">· auto-refreshing</span>' : ''}</p><div class="d-list">${mainRows.map((r) => r.html).join('')}</div>`
+            : `<p class="d-muted">No ${esc(terms.join(', '))} checks on the latest commit yet.</p>`}${others}`
           : detail.actions?.loading || hidden ? '' : '<p class="d-muted">No checks reported for the latest commit.</p>'}
         ${actionsNote}${hiddenNote}
         ${more ? `<p class="d-muted">+${more} more checks not shown</p>` : ''}
@@ -751,6 +939,50 @@ function renderDetails(): void {
     canReview(fresh) ? `<button class="btn" data-dact="review">${icon('comment')}Review</button>` : '',
     canMerge(fresh) ? `<button class="btn btn-primary" data-dact="merge">${icon('merged')}Merge</button>` : '',
   ].join('');
+}
+
+/** A check run or commit status row; check runs expand to their output. */
+function checkRow(c: DetailCheck): string {
+  const st = checkStatus(c);
+  const isRun = c.__typename === 'CheckRun';
+  const name = (isRun ? c.name : c.context) ?? 'check';
+  const sub = isRun ? c.checkSuite?.workflowRun?.workflow.name : c.description;
+  const open = detail.expanded.has(c.id);
+  return `
+    <div class="d-check${open ? ' open' : ''}">
+      <button class="d-check-row" type="button" data-check="${esc(c.id)}" aria-expanded="${open}">
+        ${BUCKET_ICON[st.bucket]}
+        <span class="d-check-name"><b>${esc(name)}</b>${sub ? `<small>${esc(sub)}</small>` : ''}</span>
+        <span class="d-check-status c-${st.bucket}">${esc(st.text)}${st.time ? `<small>${esc(st.time)}</small>` : ''}</span>
+        ${icon('chev', 'chev')}
+      </button>
+      ${open ? (isRun ? checkRunPanel(c.id, c.detailsUrl)
+        : `<div class="d-check-panel">${c.description ? `<p>${esc(c.description)}</p>` : ''}${c.targetUrl ? `<a class="d-link" href="${safeUrl(c.targetUrl)}" target="_blank" rel="noopener noreferrer">Open details ${icon('ext')}</a>` : '<p class="d-muted">No further details.</p>'}</div>`) : ''}
+    </div>`;
+}
+
+function conflictsSection(d: PullRequestDetail): string {
+  const c = detail.conflicts;
+  const behind = c && !c.loading && !c.error && c.behind
+    ? ` It is ${c.behind} commit${c.behind === 1 ? '' : 's'} behind.` : '';
+  const files = !c || c.loading ? spinnerHtml('Finding likely conflicting files…')
+    : c.error ? `<p class="d-muted">${esc(c.error)}</p>`
+    : c.files.length ? `
+      <div class="d-subhead">Likely conflicting files · changed here and on ${esc(d.baseRefName)}</div>
+      <div class="d-list">${c.files.map((f) => `
+        <button class="d-row d-file" type="button" data-dact="conflictfile" data-path="${esc(f)}">${icon('file', 'c-fail')}
+          <span class="d-grow fpath">${esc(f)}</span>${icon('chev', 'chev')}</button>`).join('')}</div>
+      ${c.partial ? '<p class="d-muted">The base branch changed more than 300 files; some may be missing.</p>' : ''}`
+    : `<p class="d-muted">No file was changed on both sides. The conflict may come from a rename or a deleted file.</p>`;
+  return `
+    <section class="d-section d-conflict" id="detailConflicts">
+      <div class="d-head">
+        <h4 class="c-fail">${icon('alert')} Merge conflicts</h4>
+        <a class="btn btn-sm" href="${safeUrl(`${d.url}/conflicts`)}" target="_blank" rel="noopener noreferrer">Resolve on GitHub ${icon('ext')}</a>
+      </div>
+      <p class="d-muted">This branch has conflicts with <span class="branch">${esc(d.baseRefName)}</span> that must be resolved before merging.${esc(behind)}</p>
+      ${files}
+    </section>`;
 }
 
 function sortJobs(jobs: Job[]): Job[] {
@@ -939,16 +1171,22 @@ async function confirmMerge(): Promise<void> {
 
 let filesPage = 1;
 let filesAll: RestFile[] = [];
+/** File to open and scroll to once the list has loaded. */
+let filesFocus = '';
 
-async function openFiles(pr: PullRequest): Promise<void> {
+async function openFiles(pr: PullRequest, focusPath = ''): Promise<void> {
   state.current = pr;
   filesPage = 1;
   filesAll = [];
+  filesFocus = focusPath;
   $('#filesSub').textContent = `${repoOf(pr)}#${pr.number} · ${pr.headRefName} → ${pr.baseRefName}`;
   $('#filesSummary').innerHTML = '';
   $('#filesList').innerHTML = '<div class="loading-row"><span class="spinner"></span></div>';
   $('#filesMoreWrap').classList.add('hidden');
+  $('#filesJump').innerHTML = '';
+  $('#filesFold').textContent = 'Collapse all';
   openDialog('#filesSheet');
+  $('#filesBody').scrollTop = 0;
   await loadFilesPage(pr);
 }
 
@@ -959,32 +1197,141 @@ async function loadFilesPage(pr: PullRequest): Promise<void> {
     filesAll.push(...page);
     renderFiles();
     $('#filesMoreWrap').classList.toggle('hidden', page.length < 100 || filesPage >= 30);
+    if (filesFocus) {
+      const i = filesAll.findIndex((f) => f.filename === filesFocus);
+      if (i >= 0) jumpToFile(i);
+      filesFocus = '';
+    }
   } catch (e) {
     $('#filesList').innerHTML = `<div class="error-box">${esc((e as Error).message)}</div>`;
   }
 }
 
+/** Folder in muted text, file name in bold. Nothing is cut off: long paths wrap. */
+function pathHtml(path: string): string {
+  const i = path.lastIndexOf('/');
+  return `${i >= 0 ? `<span class="fdir">${esc(path.slice(0, i + 1))}</span>` : ''}<b class="fbase">${esc(path.slice(i + 1))}</b>`;
+}
+
+function jumpToFile(i: number): void {
+  const el = document.getElementById(`file-${i}`) as HTMLDetailsElement | null;
+  if (!el) return;
+  el.open = true;
+  el.scrollIntoView({ block: 'start' });
+}
+
 function renderFiles(): void {
+  const pr = state.current;
   const adds = filesAll.reduce((s, f) => s + f.additions, 0);
   const dels = filesAll.reduce((s, f) => s + f.deletions, 0);
   const statusLabel: Record<string, string> = { added: 'Label--success', removed: 'Label--danger', modified: 'Label--attention', renamed: 'Label--done' };
+  const conflicts = pr ? conflictFiles.get(conflictKey(pr)) : undefined;
   $('#filesSummary').innerHTML =
-    `<span><b>${filesAll.length} changed file${filesAll.length === 1 ? '' : 's'}</b> with <span class="add">${adds} additions</span> and <span class="del">${dels} deletions</span></span>${diffstat(adds, dels)}`;
+    `<span><b>${filesAll.length} changed file${filesAll.length === 1 ? '' : 's'}</b> with <span class="add">${adds} additions</span> and <span class="del">${dels} deletions</span></span>${diffstat(adds, dels)}
+     ${conflicts?.size ? `<span class="c-fail">${icon('alert')} ${conflicts.size} likely conflicting</span>` : ''}`;
+  $('#filesJump').innerHTML = `<option value="">Jump to file… (${filesAll.length})</option>` +
+    filesAll.map((f, i) => `<option value="${i}">${conflicts?.has(f.filename) ? '⚠ ' : ''}${esc(f.filename)}</option>`).join('');
   $('#filesList').innerHTML = filesAll.length ? filesAll.map((f, i) => {
     const name = f.previous_filename ? `${f.previous_filename} → ${f.filename}` : f.filename;
+    const conflict = conflicts?.has(f.filename);
     return `
-      <details class="file" ${i < 3 && f.changes < 400 ? 'open' : ''}>
+      <details class="file${conflict ? ' is-conflict' : ''}" id="file-${i}" ${i < 3 && f.changes < 400 ? 'open' : ''}>
         <summary>
           ${icon('chev', 'chev')}
-          <span class="fname" title="${esc(name)}">&lrm;${esc(name)}</span>
-          <span class="Label ${statusLabel[f.status] ?? ''}">${esc(f.status)}</span>
-          <span class="fstat mono"><span class="add">+${f.additions}</span><span class="del">−${f.deletions}</span>${diffstat(f.additions, f.deletions)}</span>
+          <span class="fname" title="${esc(name)}">${f.previous_filename ? `${pathHtml(f.previous_filename)} <span class="c-muted">→</span> ` : ''}${pathHtml(f.filename)}</span>
+          <span class="fmeta">
+            ${conflict ? `<span class="Label Label--danger" title="Also changed on ${esc(pr?.baseRefName ?? 'the base branch')}: likely conflict">${icon('alert')}Conflict?</span>` : ''}
+            <span class="Label ${statusLabel[f.status] ?? ''}">${esc(f.status)}</span>
+            <span class="fstat mono"><span class="add">+${f.additions}</span><span class="del">−${f.deletions}</span>${diffstat(f.additions, f.deletions)}</span>
+            ${f.status !== 'removed' ? `<button class="btn btn-sm btn-invisible btn-icon" type="button" data-view-file="${esc(f.filename)}" title="View the whole file" aria-label="View the whole file">${icon('file')}</button>` : ''}
+          </span>
         </summary>
         ${f.patch
           ? `<div class="diff-wrap"><table class="diff">${renderPatch(f.patch)}</table></div>`
           : `<div class="diff-note">Binary file or diff too large to show. <a href="${safeUrl(f.blob_url)}" target="_blank" rel="noopener noreferrer">View on GitHub</a></div>`}
       </details>`;
   }).join('') : '<div class="blankslate">No file changes.</div>';
+}
+
+// ---------- Key checks (per repository) ----------
+
+const keyEdit = { owner: '', repo: '' };
+
+/** Check names seen on the loaded PRs (and the open PR details), with how many PRs have each. */
+function seenChecks(): Array<{ name: string; workflow: string | null; count: number }> {
+  const seen = new Map<string, { name: string; workflow: string | null; prs: Set<string> }>();
+  const add = (prId: string, name: string, workflow: string | null | undefined) => {
+    const k = `${workflow ?? ''}\u0000${name}`;
+    const e = seen.get(k) ?? { name, workflow: workflow ?? null, prs: new Set<string>() };
+    e.prs.add(prId);
+    seen.set(k, e);
+  };
+  const inRepo = (pr: PullRequest) => `${ownerOf(pr)}/${repoOf(pr)}`.toLowerCase() === `${keyEdit.owner}/${keyEdit.repo}`.toLowerCase();
+  for (const pr of state.prs) if (inRepo(pr)) for (const i of ciSummary(pr).items) add(pr.id, i.name, i.workflow);
+  const d = detail.data;
+  if (d && inRepo(d)) {
+    for (const c of detailChecks(d)) add(d.id, (c.__typename === 'CheckRun' ? c.name : c.context) ?? '', c.checkSuite?.workflowRun?.workflow.name);
+    for (const j of detailJobs(d)) add(d.id, j.name, j.workflow_name);
+  }
+  return [...seen.values()].map((e) => ({ name: e.name, workflow: e.workflow, count: e.prs.size }));
+}
+
+/** "orion-test (node 20)" → "orion-test": one term covers every matrix variant. */
+const baseName = (name: string) => name.replace(/\s*\([^)]*\)\s*$/, '').trim() || name;
+
+function renderKeyChecks(): void {
+  const input = $<HTMLInputElement>('#keyTerms');
+  const terms = parseTerms(input.value);
+  const match = previewMatcher(terms);
+  const items = seenChecks();
+  const rows = items
+    .map((c) => ({ ...c, on: match(c) }))
+    .sort((a, b) => Number(b.on) - Number(a.on) || b.count - a.count || a.name.localeCompare(b.name));
+  const n = rows.filter((r) => r.on).length;
+  $('#keyPreview').innerHTML = !terms.length
+    ? `<span class="c-muted">No key checks: cards count all checks.</span>`
+    : `Matches <b>${n}</b> of ${items.length} check${items.length === 1 ? '' : 's'} seen${n ? '' : ' <span class="c-pending">(none yet: check the spelling)</span>'}`;
+  $('#keyList').innerHTML = rows.length ? rows.map((r) => `
+    <button class="d-row key-row" type="button" data-kname="${esc(r.name)}" aria-pressed="${r.on}">
+      ${r.on ? icon('check', 'c-pass') : icon('dot', 'c-muted')}
+      <span class="d-grow"><b>${esc(r.name)}</b>${r.workflow ? `<small>${esc(r.workflow)}</small>` : ''}</span>
+      <span class="d-muted">${r.count} PR${r.count === 1 ? '' : 's'}</span>
+    </button>`).join('')
+    : '<p class="d-muted" style="padding:12px">No checks seen yet. Load the open pull requests (or open one) and come back, or type a name above.</p>';
+}
+
+function openKeyChecks(owner = state.owner, repo = state.repo): void {
+  keyEdit.owner = owner;
+  keyEdit.repo = repo;
+  $('#keySub').textContent = `${owner}/${repo} · the cards’ checks count uses only these`;
+  $<HTMLInputElement>('#keyTerms').value = keyChecks.terms(owner, repo).join(', ');
+  renderKeyChecks();
+  openDialog('#keySheet');
+}
+
+function toggleKeyTerm(name: string): void {
+  const input = $<HTMLInputElement>('#keyTerms');
+  const terms = parseTerms(input.value);
+  const covering = terms.filter((t) => previewMatcher([t])({ name }));
+  // Tapping a counted check removes the term(s) that select it; otherwise add its base name.
+  const next = covering.length ? terms.filter((t) => !covering.includes(t)) : [...terms, baseName(name)];
+  input.value = next.join(', ');
+  renderKeyChecks();
+}
+
+function saveKeyChecks(terms: string[]): void {
+  keyChecks.set(keyEdit.owner, keyEdit.repo, terms);
+  closeDialog('#keySheet');
+  updateKeyChip();
+  renderList();
+  if (isDialogOpen('#detailSheet')) renderDetails();
+  toast(terms.length ? `Cards now count ${terms.join(', ')} checks` : 'Cards count all checks', 'ok');
+}
+
+function updateKeyChip(): void {
+  const terms = state.repo ? keyChecks.terms(state.owner, state.repo) : [];
+  $('#keyChipLabel').textContent = terms.length ? `Checks: ${terms.join(', ')}` : 'Checks: all';
+  $('#keyChip').setAttribute('aria-pressed', String(terms.length > 0));
 }
 
 // ---------- Org / repo picker (Favourites | All) ----------
@@ -1272,7 +1619,7 @@ function onPick(value: string): void {
   } else {
     state.repo = value;
     saveLast();
-    void loadPrs(true);
+    reloadView();
   }
 }
 
@@ -1418,6 +1765,40 @@ async function runDiagnostics(): Promise<void> {
   renderDiag(rows, hints, false);
 }
 
+// ---------- Code view hooks ----------
+
+/** Opens the PR's branch in the Code view (its head commit when the branch is gone or in a fork). */
+function browsePr(pr: PullRequest): void {
+  const d = detail.data?.id === pr.id ? detail.data : null;
+  const sha = pr.commits.nodes[0]?.commit.oid;
+  const sameRepo = !d || d.headRepositoryOwner?.login.toLowerCase() === ownerOf(pr).toLowerCase();
+  if (ownerOf(pr).toLowerCase() !== state.owner.toLowerCase() || repoOf(pr).toLowerCase() !== state.repo.toLowerCase()) {
+    state.owner = ownerOf(pr);
+    state.repo = repoOf(pr);
+    saveLast();
+  }
+  closeDialogs();
+  if (pr.state === 'OPEN' && sameRepo) codeView.browse(pr.headRefName);
+  else if (sha) codeView.browse(sha, `PR #${pr.number} head (${sha.slice(0, 7)})`);
+  else codeView.browse(pr.headRefName);
+  setView('code');
+  updateHeader();
+  scrollTo({ top: 0 });
+}
+
+async function openPrByNumber(n: number): Promise<void> {
+  const same = (p: PullRequest) => p.number === n && repoKey() === `${ownerOf(p)}/${repoOf(p)}`.toLowerCase();
+  const known = state.prs.find(same);
+  if (known) return void openDetails(known);
+  try {
+    const pr = await fetchPullRequestByNumber(state.owner, state.repo, n);
+    if (pr) void openDetails(pr);
+    else toast(`Pull request #${n} not found`, 'err');
+  } catch (e) {
+    toast((e as Error).message, 'err');
+  }
+}
+
 // ---------- Wiring ----------
 
 function findPr(id: string | undefined): PullRequest | undefined {
@@ -1492,7 +1873,23 @@ function init(): void {
   });
 
   // If start-up never got the account (e.g. offline at launch), Refresh retries the whole start-up.
-  $('#refreshBtn').addEventListener('click', () => void (state.viewer ? loadPrs(true) : boot()));
+  $('#refreshBtn').addEventListener('click', () => void (state.viewer ? reloadView() : boot()));
+  document.querySelectorAll<HTMLElement>('[data-view]').forEach((b) =>
+    b.addEventListener('click', () => { if (state.view !== b.dataset.view) setView(b.dataset.view as View); }));
+  codeView.init({ owner: () => state.owner, repo: () => state.repo, openPr: (n) => void openPrByNumber(n) });
+
+  // Key checks
+  $('#keyChip').addEventListener('click', () => openKeyChecks());
+  $('#keyTerms').addEventListener('input', renderKeyChecks);
+  $('#keyTerms').addEventListener('keydown', (e) => {
+    if ((e as KeyboardEvent).key === 'Enter') $('#keySave').click();
+  });
+  $('#keyList').addEventListener('click', (e) => {
+    const row = (e.target as HTMLElement).closest<HTMLElement>('[data-kname]');
+    if (row) toggleKeyTerm(row.dataset.kname ?? '');
+  });
+  $('#keySave').addEventListener('click', () => saveKeyChecks(parseTerms($<HTMLInputElement>('#keyTerms').value)));
+  $('#keyAll').addEventListener('click', () => saveKeyChecks([]));
   $('#pickerSync').addEventListener('click', () => void syncPicker());
 
   $('#ownerBtn').addEventListener('click', () => void openPicker('owner'));
@@ -1592,10 +1989,18 @@ function init(): void {
     const target = e.target as HTMLElement;
     const check = target.closest<HTMLElement>('[data-check]');
     if (check) return void toggleCheck(check.dataset.check ?? '');
-    const act = target.closest<HTMLElement>('[data-dact]')?.dataset.dact;
+    const actEl = target.closest<HTMLElement>('[data-dact]');
+    const act = actEl?.dataset.dact;
     const pr = detail.data ?? detail.pr;
     if (!act || !pr) return;
-    if (act === 'refresh') void loadDetails();
+    if (act === 'others') {
+      e.preventDefault(); // re-rendered below; keeps the state across auto-refreshes
+      detail.showOthers = !detail.showOthers;
+      renderDetails();
+    } else if (act === 'keys') openKeyChecks(ownerOf(pr), repoOf(pr));
+    else if (act === 'browse') browsePr(pr);
+    else if (act === 'conflictfile') void openFiles(pr, actEl.dataset.path ?? '');
+    else if (act === 'refresh') void loadDetails();
     else if (act === 'body') { detail.showFullBody = !detail.showFullBody; renderDetails(); }
     else if (act === 'files') void openFiles(pr);
     else if (act === 'review') openReview(pr);
@@ -1620,6 +2025,26 @@ function init(): void {
 
   $('#reviewConfirm').addEventListener('click', () => void submitReview());
   $('#mergeConfirm').addEventListener('click', () => void confirmMerge());
+  initZoom('#filesSheet', $('#filesTools'), $('#filesBody'));
+  $('#filesList').addEventListener('click', (e) => {
+    const btn = (e.target as HTMLElement).closest<HTMLElement>('[data-view-file]');
+    const pr = state.current;
+    if (!btn || !pr) return;
+    e.preventDefault(); // don't fold the file
+    const sha = pr.commits.nodes[0]?.commit.oid ?? pr.headRefName;
+    void openBlob(ownerOf(pr), repoOf(pr), sha, btn.dataset.viewFile ?? '', `#${pr.number} · ${pr.headRefName}`);
+  });
+  $<HTMLSelectElement>('#filesJump').addEventListener('change', (e) => {
+    const sel = e.target as HTMLSelectElement;
+    if (sel.value) jumpToFile(Number(sel.value));
+    sel.value = '';
+  });
+  $('#filesFold').addEventListener('click', () => {
+    const btn = $('#filesFold');
+    const open = btn.textContent === 'Expand all';
+    document.querySelectorAll<HTMLDetailsElement>('#filesList details.file').forEach((d) => { d.open = open; });
+    btn.textContent = open ? 'Collapse all' : 'Expand all';
+  });
   $('#filesMoreBtn').addEventListener('click', () => {
     if (!state.current) return;
     filesPage++;

@@ -94,6 +94,7 @@ export async function checkToken(token: string, onProgress: (items: Requirement[
 
   if (fine) push({ label: 'Checks from GitHub Apps', status: 'info', detail: 'Not available with fine-grained tokens (e.g. Semgrep). Use a classic token to see them.' });
   push({ label: 'Approve / comment', status: 'info', detail: 'Needs “Pull requests: Read and write”. GitHub doesn’t let apps verify write access of fine-grained tokens.' });
+  push({ label: 'Code view and conflicting files', status: 'info', detail: 'Need “Contents: Read”.' });
   push({ label: 'Merge', status: 'info', detail: 'Needs “Contents: Read and write” (only if you merge from the app).' });
   return done();
 }

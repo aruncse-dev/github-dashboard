@@ -1,7 +1,7 @@
 # GitHub Dashboard (PR Dashboard)
 
 A small, mobile-friendly page for doing quick pull-request work on GitHub from anywhere:
-pick an org and repo (with ★ favourites), list open and closed PRs, see review and CI check status, view changed files and diffs, submit a review (approve, request changes or comment), and merge.
+pick an org and repo (with ★ favourites), list open and closed PRs, see review and CI check status, view changed files and diffs, submit a review (approve, request changes or comment), and merge. A **Code** view browses any branch of the repo, file by file.
 
 **The token never leaves your browser.** There's no backend. The page stores your token in `localStorage` on your device and sends it only to `https://api.github.com`. The production build includes a Content-Security-Policy (`connect-src https://api.github.com`), so the browser itself blocks requests anywhere else.
 
@@ -57,6 +57,7 @@ Installing needs **HTTPS**, so use the GitHub Pages URL. A plain `http://192.168
 | CI status from external systems (Jenkins, Vercel…) | Commit statuses: Read |
 | GitHub Actions results: jobs, steps, durations | Actions: Read |
 | Approve / request changes / comment | Pull requests: Read and write |
+| Code view, “View file”, likely conflicting files | Contents: Read |
 | Merge | Contents: Read and write |
 
 Fine-grained tokens have **no "Checks" permission**: GitHub offers it only to GitHub Apps, and no other permission (Workflows, write access…) unlocks it. So with a fine-grained token:
@@ -86,7 +87,11 @@ If your org enforces SAML SSO, authorize the token for the org (GitHub → Setti
 | Repo picker | 30 most recently updated repos (one request, cached), plus live GraphQL `search(type: REPOSITORY)` as you type |
 | Search suggestions | Qualifiers, recent searches, authors and branches from loaded PRs, repo labels via GraphQL `repository.labels` |
 | PR details (tap a card) | GraphQL `node(id)`: checks with status and duration, reviews, description, latest commits and comments. A check's summary and annotations load on tap via the `CheckRun` node. Refreshes every 15 s while checks are running. Raw CI logs aren't available in the browser |
-| Files changed and diffs | REST `GET /repos/{o}/{r}/pulls/{n}/files` |
+| Files changed and diffs | REST `GET /repos/{o}/{r}/pulls/{n}/files`. Full paths (they wrap, never cut off), jump-to-file, collapse/expand all, “View file” for the whole file at the PR head |
+| Diff zoom | A−/A+, pinch (touch), ctrl/⌘ + scroll or trackpad pinch (desktop), keys `+` `−` `0`; `w` wraps long lines, `f` is full screen. Line numbers stay put when scrolling sideways; file headers stay on top. One setting for all code views (`gh_pr_code_view`) |
+| Key checks (per repo) | Chosen in the **Checks:** chip or PR details → *Key checks*. Card counts use only matching checks (name or workflow contains the text, `*` wildcard), e.g. `orion-test` for orion, `npm test` for rigel. Failures outside them show as `+N ✕`. Stored per browser (`gh_pr_keychecks_v1`) |
+| Conflicts | Cards say **Conflicts** (PRs GitHub still reports as UNKNOWN are re-checked a few times). PR details lists *likely* conflicting files: files changed in the PR and on the base branch since they split (REST `compare/{head}...{base}`), and marks them in Files changed. GitHub doesn’t expose the exact conflicts; *Resolve on GitHub* opens its editor |
+| Code view | GraphQL `repository.refs` (branches, newest first, with their open PR) and `object(expression: "branch:path")` for folders and files |
 | Review | REST `POST /repos/{o}/{r}/pulls/{n}/reviews`. Hidden on your own PRs (GitHub forbids self-approval); Approve is disabled if you already approved |
 | Merge | Shown only for non-draft PRs where your permission is write/maintain/admin. REST `PUT /repos/{o}/{r}/pulls/{n}/merge` (sends the head SHA, so it never merges commits you didn't see) |
 
@@ -103,6 +108,9 @@ The search box accepts GitHub search syntax (`author:name`, `label:bug`, `head:b
 ```
 index.html        app shell and dialogs
 src/main.ts       state, rendering and event wiring
+src/code.ts       Code view: branch picker, folders, file viewer
+src/zoom.ts       zoom / wrap / full screen for diffs and files
+src/keychecks.ts  per-repo key checks for card counts
 src/api.ts        token storage, plus REST and GraphQL fetch helpers
 src/queries.ts    GraphQL queries, types and check-status helpers
 src/ui.ts         icons, escaping, toasts, dialogs and diff rendering
