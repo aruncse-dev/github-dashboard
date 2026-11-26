@@ -548,6 +548,12 @@ mark { background: var(--attention-subtle); color: inherit; border-radius: 2px; 
 .zoombar .btn .aa { font-weight: 700; }
 .zoombar .btn[aria-pressed="true"] { background: var(--accent-subtle); border-color: var(--accent); color: var(--accent); }
 .zoombar .octicon { width: 14px; height: 14px; }
+.files-search { position: relative; flex: 1 1 100%; display: flex; gap: 6px; align-items: center; min-width: 0; }
+.files-search > [data-icon] { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); display: flex; color: var(--fg-muted); pointer-events: none; }
+.files-search input { flex: 1; min-width: 0; min-height: 32px; padding: 4px 10px 4px 32px; }
+.files-found { flex-basis: 100%; display: flex; align-items: center; gap: 6px; color: var(--fg); }
+.files-found .btn { min-height: 24px; padding: 0 6px; font-size: 12px; }
+.diff mark { background: var(--attention-subtle); box-shadow: 0 0 0 1px var(--attention); border-radius: 2px; }
 .files-jump { flex: 1 1 180px; min-width: 0; min-height: 32px; padding: 4px 28px 4px 10px; font-size: 13px; width: auto; }
 /* One column that never grows past the dialog: wide diffs scroll inside their file box. */
 .code-body { touch-action: pan-x pan-y; grid-template-columns: minmax(0, 1fr); }
@@ -680,6 +686,7 @@ button.code-entry:hover { background: var(--canvas-subtle); }
   .file > summary { grid-template-columns: 16px minmax(0, 1fr) auto; }
   .fmeta { grid-column: 3; flex-wrap: nowrap; }
   .fmeta .btn-icon { margin-left: 0; }
+  .files-search { flex: 1 1 280px; }
   .subnav { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .search { grid-column: auto; }
   .chips { margin: 0 0 12px; padding: 0 0 2px; }

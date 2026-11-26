@@ -153,7 +153,23 @@ export async function withBusy<T>(btn: HTMLButtonElement, work: () => Promise<T>
 
 // ---------- Diff rendering ----------
 
-export function renderPatch(patch: string): string {
+/** Escapes `text` and wraps every case-insensitive occurrence of each term in <mark>. */
+export function markText(text: string, terms: string[]): string {
+  const ts = terms.filter(Boolean);
+  if (!ts.length) return esc(text);
+  const re = new RegExp(ts.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).sort((a, b) => b.length - a.length).join('|'), 'gi');
+  let out = '';
+  let last = 0;
+  for (const m of text.matchAll(re)) {
+    if (!m[0]) continue;
+    out += `${esc(text.slice(last, m.index))}<mark>${esc(m[0])}</mark>`;
+    last = m.index! + m[0].length;
+  }
+  return out + esc(text.slice(last));
+}
+
+/** `mark` highlights a search phrase in the diff lines. */
+export function renderPatch(patch: string, mark = ''): string {
   let oldLine = 0;
   let newLine = 0;
   return patch.split('\n').map((line) => {
@@ -161,7 +177,7 @@ export function renderPatch(patch: string): string {
     if (hunk) {
       oldLine = +hunk[1];
       newLine = +hunk[2];
-      return `<tr class="h"><td class="num"></td><td class="num"></td><td class="code">${esc(line)}</td></tr>`;
+      return `<tr class="h"><td class="num"></td><td class="num"></td><td class="code">${markText(line, [mark])}</td></tr>`;
     }
     let cls = '';
     let o: number | '' = '';
@@ -170,7 +186,7 @@ export function renderPatch(patch: string): string {
     else if (line.startsWith('-')) { cls = 'd'; o = oldLine++; }
     else if (line.startsWith('\\')) { cls = ''; } // "\ No newline at end of file"
     else { o = oldLine++; n = newLine++; }
-    return `<tr class="${cls}"><td class="num">${o}</td><td class="num">${n}</td><td class="code">${esc(line) || ' '}</td></tr>`;
+    return `<tr class="${cls}"><td class="num">${o}</td><td class="num">${n}</td><td class="code">${markText(line, [mark]) || ' '}</td></tr>`;
   }).join('');
 }
 
