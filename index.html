@@ -51,7 +51,7 @@
                 <tr><td>Pull requests</td><td>Read · Read &amp; write to approve</td></tr>
                 <tr><td>Commit statuses</td><td>Read</td></tr>
                 <tr><td>Actions</td><td>Read</td></tr>
-                <tr><td>Contents</td><td>Read &amp; write to merge</td></tr>
+                <tr><td>Contents</td><td>Read to browse code · Read &amp; write to merge</td></tr>
               </tbody>
             </table>
             <p class="d-muted">Doesn’t show checks from GitHub Apps (e.g. Semgrep).</p>
@@ -76,7 +76,10 @@
       <header class="AppHeader">
         <div class="hdr">
           <div class="hdr-mark" data-logo></div>
-          <div class="crumbs"><b>Pull requests</b></div>
+          <nav class="views" aria-label="View">
+            <button type="button" data-view="prs" aria-pressed="true" title="Pull requests"><span data-icon="open"></span><span class="v-long">Pull requests</span><span class="v-short">PRs</span></button>
+            <button type="button" data-view="code" aria-pressed="false" title="Browse code on any branch"><span data-icon="code"></span><span>Code</span></button>
+          </nav>
           <button class="btn btn-invisible btn-icon" id="themeBtn" title="Theme: auto" aria-label="Toggle theme">◐</button>
           <button class="btn btn-invisible btn-icon" id="refreshBtn" title="Refresh" aria-label="Refresh" data-icon="sync"></button>
           <button class="btn btn-invisible btn-icon" id="logoutBtn" title="Forget token on this device" aria-label="Forget token" data-icon="signout"></button>
@@ -99,28 +102,45 @@
               <span data-icon="triangle" class="c-muted"></span>
             </button>
           </div>
-          <div class="search">
+          <div class="search" data-for="prs">
             <span data-icon="search"></span>
             <input class="form-control" id="q" type="search" placeholder="Search or filter: author:, label:, review:…" aria-label="Search pull requests" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search">
             <div class="suggest hidden" id="qSuggest" role="listbox" aria-label="Search suggestions"></div>
           </div>
         </div>
 
-        <div class="chips" role="toolbar" aria-label="Quick filters">
+        <div class="chips" data-for="prs" role="toolbar" aria-label="Quick filters">
           <button class="chip" data-chip="" aria-pressed="true">All</button>
           <button class="chip" data-chip="requested" title="Waiting for your review">To review</button>
           <button class="chip" data-chip="mine" title="Opened by you">Mine</button>
           <button class="chip" data-chip="ready" title="Approved, checks passed, not a draft">Ready to merge</button>
+          <button class="chip chip-key" id="keyChip" type="button" title="Choose which checks count on the cards for this repository"><span data-icon="filter"></span><span id="keyChipLabel">Checks: all</span></button>
         </div>
 
-        <div class="seg" role="group" aria-label="State">
+        <div class="seg" data-for="prs" role="group" aria-label="State">
           <button data-tab="open" aria-pressed="true"><span data-icon="open"></span><span id="openCount">–</span> Open</button>
           <button data-tab="closed" aria-pressed="false"><span data-icon="check"></span><span id="closedCount">–</span> Closed</button>
         </div>
 
-        <div id="listError" class="error-box hidden" role="alert"></div>
-        <div class="pr-list" id="list"></div>
-        <div class="paginate hidden" id="moreWrap"><button class="btn" id="moreBtn">Load more</button></div>
+        <div data-for="prs">
+          <div id="listError" class="error-box hidden" role="alert"></div>
+          <div class="pr-list" id="list"></div>
+          <div class="paginate hidden" id="moreWrap"><button class="btn" id="moreBtn">Load more</button></div>
+        </div>
+
+        <!-- Code: browse any branch -->
+        <section id="codeView" data-for="code" class="hidden" aria-label="Code">
+          <div class="code-bar">
+            <button class="ctx-btn code-branch" id="branchBtn" aria-haspopup="dialog" title="Switch branch">
+              <span data-icon="branch" class="c-muted"></span><b id="branchLabel">…</b><span data-icon="triangle" class="c-muted"></span>
+            </button>
+          </div>
+          <div id="codePr"></div>
+          <div class="code-commit" id="codeCommit"></div>
+          <nav class="code-path" id="codePath" aria-label="Folder"></nav>
+          <div id="codeError" class="error-box hidden" role="alert"></div>
+          <div class="code-tree" id="codeTree"></div>
+        </section>
       </main>
     </section>
 
@@ -218,6 +238,60 @@
       </div>
     </div>
 
+    <!-- Key checks: which checks count on cards (per repository) -->
+    <div class="Overlay-backdrop hidden" id="keySheet">
+      <div class="Overlay" role="dialog" aria-modal="true" aria-labelledby="keyTitle" style="height:min(640px,92dvh)">
+        <div class="Overlay-header">
+          <div><h2 class="Overlay-title" id="keyTitle">Key checks</h2><p class="Overlay-desc" id="keySub"></p></div>
+          <button class="btn btn-invisible btn-icon" data-close aria-label="Close" data-icon="x"></button>
+        </div>
+        <div class="Overlay-body">
+          <div>
+            <label class="fl" for="keyTerms">Count only checks whose name contains</label>
+            <input class="form-control" id="keyTerms" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="e.g. orion-test, npm test">
+            <p class="d-muted" style="margin-top:6px">Separate several with commas. <code>*</code> is a wildcard. Matches the check’s name or its workflow. Empty = all checks count.</p>
+          </div>
+          <p class="d-counts" id="keyPreview"></p>
+          <div class="d-subhead">Checks seen in this repository · tap to add or remove</div>
+          <div class="d-list" id="keyList"></div>
+        </div>
+        <div class="Overlay-footer">
+          <button class="btn" id="keyAll">Count all checks</button>
+          <button class="btn btn-primary" id="keySave">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Branch picker (Code view) -->
+    <div class="Overlay-backdrop hidden" id="branchSheet">
+      <div class="Overlay" role="dialog" aria-modal="true" aria-labelledby="branchTitle" style="height:min(620px,92dvh)">
+        <div class="Overlay-header">
+          <div><h2 class="Overlay-title" id="branchTitle">Switch branch</h2><p class="Overlay-desc" id="branchSub"></p></div>
+          <button class="btn btn-invisible btn-icon" data-close aria-label="Close" data-icon="x"></button>
+        </div>
+        <div class="Overlay-body" style="padding-bottom:0">
+          <div class="picker-search">
+            <span data-icon="search"></span>
+            <input class="form-control" id="branchQ" type="search" placeholder="Find a branch" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Find a branch">
+          </div>
+          <div class="picker-list" id="branchList" role="listbox"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- File viewer (Code view, and "View file" in Files changed) -->
+    <div class="Overlay-backdrop hidden" id="blobSheet">
+      <div class="Overlay wide" role="dialog" aria-modal="true" aria-labelledby="blobTitle">
+        <div class="Overlay-header">
+          <div><h2 class="Overlay-title fpath" id="blobTitle">File</h2><p class="Overlay-desc" id="blobSub"></p></div>
+          <a class="btn btn-invisible btn-icon" id="blobGitHub" href="#" target="_blank" rel="noopener noreferrer" title="Open on GitHub" aria-label="Open on GitHub" data-icon="ext"></a>
+          <button class="btn btn-invisible btn-icon" data-close aria-label="Close" data-icon="x"></button>
+        </div>
+        <div class="Overlay-tools zoombar" id="blobTools"></div>
+        <div class="Overlay-body code-body" id="blobBody"></div>
+      </div>
+    </div>
+
     <!-- Files changed dialog -->
     <div class="Overlay-backdrop hidden" id="filesSheet">
       <div class="Overlay wide" role="dialog" aria-modal="true" aria-labelledby="filesTitle">
@@ -225,7 +299,11 @@
           <div><h2 class="Overlay-title" id="filesTitle">Files changed</h2><p class="Overlay-desc" id="filesSub"></p></div>
           <button class="btn btn-invisible btn-icon" data-close aria-label="Close" data-icon="x"></button>
         </div>
-        <div class="Overlay-body">
+        <div class="Overlay-tools zoombar" id="filesTools">
+          <button class="btn btn-sm" type="button" id="filesFold" title="Collapse or expand every file">Collapse all</button>
+          <select class="form-control files-jump" id="filesJump" aria-label="Jump to file"></select>
+        </div>
+        <div class="Overlay-body code-body" id="filesBody">
           <div class="files-toolbar" id="filesSummary"></div>
           <div class="files-list" id="filesList"></div>
           <div class="paginate hidden" id="filesMoreWrap"><button class="btn" id="filesMoreBtn">Load more files</button></div>

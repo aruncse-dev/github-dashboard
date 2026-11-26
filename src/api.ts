@@ -198,11 +198,22 @@ export interface RestFile {
   blob_url: string;
 }
 
+export interface RestCompare {
+  status: 'diverged' | 'ahead' | 'behind' | 'identical';
+  ahead_by: number;
+  behind_by: number;
+  merge_base_commit: { sha: string };
+  files?: Array<{ filename: string; previous_filename?: string; status: string }>;
+}
+
 export type ReviewEvent = 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT';
 export type MergeMethod = 'merge' | 'squash' | 'rebase';
 
 const repoPath = (owner: string, repo: string) =>
   `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+
+/** Branch names may contain "/"; keep those, encode the rest. */
+const refPath = (ref: string) => ref.split('/').map(encodeURIComponent).join('/');
 
 export interface RestRepo {
   name: string;
@@ -236,6 +247,13 @@ export const rest = {
 
   files: (owner: string, repo: string, n: number, page: number) =>
     request<RestFile[]>(`${repoPath(owner, repo)}/pulls/${n}/files?per_page=100&page=${page}`),
+
+  /**
+   * `base...head`: what head has that base doesn't, since they split (Contents: Read).
+   * Files (up to 300) come only with the first page, so one commit per page keeps it small.
+   */
+  compare: (owner: string, repo: string, base: string, head: string) =>
+    request<RestCompare>(`${repoPath(owner, repo)}/compare/${refPath(base)}...${refPath(head)}?per_page=1`),
 
   review: (owner: string, repo: string, n: number, event: ReviewEvent, body: string) =>
     request<unknown>(`${repoPath(owner, repo)}/pulls/${n}/reviews`, {

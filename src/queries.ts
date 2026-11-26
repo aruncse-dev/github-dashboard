@@ -214,6 +214,8 @@ export interface DetailCheck extends CheckContext {
 }
 
 export interface PullRequestDetail extends PullRequest {
+  /** Null when the head repository (e.g. a fork) was deleted. */
+  headRepositoryOwner: { login: string } | null;
   bodyText: string;
   bodyHTML: string;
   additions: number;
@@ -247,6 +249,7 @@ export async function fetchPullRequestDetail(id: string): Promise<PullRequestDet
       node(id: $id) {
         ... on PullRequest {
           ...PR
+          headRepositoryOwner { login }
           bodyText bodyHTML additions deletions changedFiles
           labels(first: 20) { nodes { name color } }
           latestReviews(first: 20) { nodes { author { login } state submittedAt } }
@@ -304,6 +307,128 @@ export async function fetchPullRequest(id: string): Promise<PullRequest | null> 
     query($id: ID!) { node(id: $id) { ...PR } }
     ${PR_FIELDS}`, { id });
   return data.node;
+}
+
+/** GitHub works out mergeability lazily (UNKNOWN at first); asking again picks up the result. */
+export async function fetchMergeable(ids: string[]): Promise<Map<string, PullRequest['mergeable']>> {
+  const data = await graphql<{ nodes: Array<{ id: string; mergeable: PullRequest['mergeable'] } | null> }>(`
+    query($ids: [ID!]!) { nodes(ids: $ids) { ... on PullRequest { id mergeable } } }`, { ids }, true);
+  return new Map(data.nodes.filter((n): n is { id: string; mergeable: PullRequest['mergeable'] } => !!n?.id).map((n) => [n.id, n.mergeable]));
+}
+
+// ---------- Code browser ----------
+
+export interface Branch {
+  name: string;
+  committedDate: string | null;
+  /** Open pull request from this branch, if any. */
+  pr: { number: number; title: string } | null;
+}
+
+export interface BranchList {
+  defaultBranch: string;
+  total: number;
+  branches: Branch[];
+}
+
+/** Branches, most recently committed first; `q` filters by name on GitHub. */
+export async function fetchBranches(owner: string, name: string, q = ''): Promise<BranchList> {
+  const data = await graphql<{ repository: {
+    defaultBranchRef: { name: string } | null;
+    refs: { totalCount: number; nodes: Array<{
+      name: string;
+      target: { committedDate?: string } | null;
+      associatedPullRequests: { nodes: Array<{ number: number; title: string }> };
+    }> };
+  } | null }>(`
+    query($owner: String!, $name: String!, $q: String) {
+      repository(owner: $owner, name: $name) {
+        defaultBranchRef { name }
+        refs(refPrefix: "refs/heads/", first: 100, query: $q, orderBy: { field: TAG_COMMIT_DATE, direction: DESC }) {
+          totalCount
+          nodes {
+            name
+            target { ... on Commit { committedDate } }
+            associatedPullRequests(states: OPEN, first: 1) { nodes { number title } }
+          }
+        }
+      }
+    }`, { owner, name, q: q || null });
+  const repo = data.repository;
+  if (!repo) throw new Error(`Repository ${owner}/${name} not found (or the token has no access to it).`);
+  return {
+    defaultBranch: repo.defaultBranchRef?.name ?? '',
+    total: repo.refs.totalCount,
+    branches: repo.refs.nodes.map((n) => ({
+      name: n.name,
+      committedDate: n.target?.committedDate ?? null,
+      pr: n.associatedPullRequests.nodes[0] ?? null,
+    })),
+  };
+}
+
+export interface TreeEntry {
+  name: string;
+  path: string;
+  /** blob = file, tree = folder, commit = submodule */
+  type: 'blob' | 'tree' | 'commit';
+  object: { byteSize?: number; isBinary?: boolean | null } | null;
+}
+
+export interface BlobData {
+  byteSize: number;
+  isBinary: boolean | null;
+  isTruncated: boolean;
+  text: string | null;
+}
+
+export interface CommitInfo {
+  oid: string;
+  abbreviatedOid: string;
+  messageHeadline: string;
+  committedDate: string;
+  url: string;
+  author: { name: string | null; user: { login: string } | null } | null;
+}
+
+export interface CodeObject {
+  defaultBranch: string;
+  commit: CommitInfo | null;
+  object: ({ __typename: 'Tree'; entries: TreeEntry[] } | ({ __typename: 'Blob' } & BlobData)) | null;
+}
+
+/** A folder or file at `rev` (branch name or commit SHA), plus the commit it comes from. */
+export async function fetchCode(owner: string, name: string, rev: string, path: string): Promise<CodeObject> {
+  const data = await graphql<{ repository: {
+    defaultBranchRef: { name: string } | null;
+    commit: CommitInfo | null;
+    object: CodeObject['object'];
+  } | null }>(`
+    query($owner: String!, $name: String!, $rev: String!, $expr: String!) {
+      repository(owner: $owner, name: $name) {
+        defaultBranchRef { name }
+        commit: object(expression: $rev) {
+          ... on Commit { oid abbreviatedOid messageHeadline committedDate url author { name user { login } } }
+        }
+        object(expression: $expr) {
+          __typename
+          ... on Tree { entries { name path type object { ... on Blob { byteSize isBinary } } } }
+          ... on Blob { byteSize isBinary isTruncated text }
+        }
+      }
+    }`, { owner, name, rev, expr: `${rev}:${path}` });
+  const repo = data.repository;
+  if (!repo) throw new Error(`Repository ${owner}/${name} not found (or the token has no access to it).`);
+  // An empty commit result means the branch (or SHA) doesn't exist.
+  return { defaultBranch: repo.defaultBranchRef?.name ?? '', commit: repo.commit && 'oid' in repo.commit ? repo.commit : null, object: repo.object };
+}
+
+/** One pull request by number (e.g. a branch's PR opened from the Code view). */
+export async function fetchPullRequestByNumber(owner: string, name: string, number: number): Promise<PullRequest | null> {
+  const data = await graphql<{ repository: { pullRequest: PullRequest | null } | null }>(`
+    query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { ...PR } } }
+    ${PR_FIELDS}`, { owner, name, number });
+  return data.repository?.pullRequest ?? null;
 }
 
 const REPO_FIELDS = `
@@ -411,7 +536,7 @@ export interface CheckSummary {
   overall: 'pass' | 'fail' | 'pending' | 'none';
   /** Set when GitHub's overall state shows hidden checks failing or running. */
   hiddenState?: 'fail' | 'pending' | null;
-  items: Array<{ name: string; url: string | null; bucket: CheckBucket; fromCheckRun?: boolean; runId?: number }>;
+  items: Array<{ name: string; workflow?: string | null; url: string | null; bucket: CheckBucket; fromCheckRun?: boolean; runId?: number }>;
 }
 
 const checkName = (c: CheckContext): string => (c.__typename === 'CheckRun' ? c.name : c.context) ?? '';
@@ -475,6 +600,7 @@ export function summarizeChecks(pr: PullRequest): CheckSummary {
   for (const c of checks) {
     addCheck(s, {
       name: checkName(c) || (c.__typename === 'CheckRun' ? 'check' : 'status'),
+      workflow: c.checkSuite?.workflowRun?.workflow.name ?? null,
       url: (c.__typename === 'CheckRun' ? c.detailsUrl : c.targetUrl) ?? null,
       bucket: checkBucket(c),
       fromCheckRun: c.__typename === 'CheckRun',
