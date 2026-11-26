@@ -302,6 +302,11 @@
         <div class="Overlay-tools zoombar" id="filesTools">
           <button class="btn btn-sm" type="button" id="filesFold" title="Collapse or expand every file">Collapse all</button>
           <select class="form-control files-jump" id="filesJump" aria-label="Jump to file"></select>
+          <div class="files-search">
+            <span data-icon="search"></span>
+            <input class="form-control" id="filesQ" type="search" placeholder="Search files… ( / )" aria-label="Search changed files" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search">
+            <button class="btn btn-sm" type="button" id="filesInDiff" aria-pressed="false" title="Also search the changed lines">In diffs</button>
+          </div>
         </div>
         <div class="Overlay-body code-body" id="filesBody">
           <div class="files-toolbar" id="filesSummary"></div>

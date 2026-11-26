@@ -7,7 +7,7 @@ import {
   type CheckBucket, type CheckRunDetail, type DetailCheck, type PullRequest, type PullRequestDetail, type Repo, type Viewer,
 } from './queries';
 import {
-  $, closeDialog, closeDialogs, diffstat, esc, hydrateIcons, icon, initDialogs, isDialogOpen, openDialog, renderPatch, safeUrl, timeAgo, toast, withBusy,
+  $, closeDialog, closeDialogs, diffstat, esc, hydrateIcons, icon, markText, initDialogs, isDialogOpen, openDialog, renderPatch, safeUrl, timeAgo, toast, withBusy,
 } from './ui';
 import { keyChecks, parseTerms, previewMatcher } from './keychecks';
 import { initZoom } from './zoom';
@@ -1173,6 +1173,16 @@ let filesPage = 1;
 let filesAll: RestFile[] = [];
 /** File to open and scroll to once the list has loaded. */
 let filesFocus = '';
+/** Search in Files changed: path words, or (in diffs) a phrase in the changed lines too. */
+const filesSearch = { q: '', inDiff: false };
+
+function fileMatches(f: RestFile): boolean {
+  const q = filesSearch.q.toLowerCase();
+  if (!q) return true;
+  const path = `${f.previous_filename ?? ''} ${f.filename}`.toLowerCase();
+  if (q.split(/\s+/).every((t) => path.includes(t))) return true;
+  return filesSearch.inDiff && !!f.patch?.toLowerCase().includes(q);
+}
 
 async function openFiles(pr: PullRequest, focusPath = ''): Promise<void> {
   state.current = pr;
@@ -1185,6 +1195,8 @@ async function openFiles(pr: PullRequest, focusPath = ''): Promise<void> {
   $('#filesMoreWrap').classList.add('hidden');
   $('#filesJump').innerHTML = '';
   $('#filesFold').textContent = 'Collapse all';
+  filesSearch.q = '';
+  $<HTMLInputElement>('#filesQ').value = '';
   openDialog('#filesSheet');
   $('#filesBody').scrollTop = 0;
   await loadFilesPage(pr);
@@ -1208,9 +1220,9 @@ async function loadFilesPage(pr: PullRequest): Promise<void> {
 }
 
 /** Folder in muted text, file name in bold. Nothing is cut off: long paths wrap. */
-function pathHtml(path: string): string {
+function pathHtml(path: string, terms: string[] = []): string {
   const i = path.lastIndexOf('/');
-  return `${i >= 0 ? `<span class="fdir">${esc(path.slice(0, i + 1))}</span>` : ''}<b class="fbase">${esc(path.slice(i + 1))}</b>`;
+  return `${i >= 0 ? `<span class="fdir">${markText(path.slice(0, i + 1), terms)}</span>` : ''}<b class="fbase">${markText(path.slice(i + 1), terms)}</b>`;
 }
 
 function jumpToFile(i: number): void {
@@ -1229,16 +1241,29 @@ function renderFiles(): void {
   $('#filesSummary').innerHTML =
     `<span><b>${filesAll.length} changed file${filesAll.length === 1 ? '' : 's'}</b> with <span class="add">${adds} additions</span> and <span class="del">${dels} deletions</span></span>${diffstat(adds, dels)}
      ${conflicts?.size ? `<span class="c-fail">${icon('alert')} ${conflicts.size} likely conflicting</span>` : ''}`;
-  $('#filesJump').innerHTML = `<option value="">Jump to file… (${filesAll.length})</option>` +
-    filesAll.map((f, i) => `<option value="${i}">${conflicts?.has(f.filename) ? '⚠ ' : ''}${esc(f.filename)}</option>`).join('');
-  $('#filesList').innerHTML = filesAll.length ? filesAll.map((f, i) => {
+  // Keep each file's index in filesAll: ids and the jump list refer to it.
+  const q = filesSearch.q;
+  const shown = filesAll.map((f, i) => ({ f, i })).filter(({ f }) => fileMatches(f));
+  const pathTerms = q ? q.split(/\s+/) : [];
+  const diffMark = q && filesSearch.inDiff ? q : '';
+  $('#filesJump').innerHTML = `<option value="">Jump to file… (${shown.length})</option>` +
+    shown.map(({ f, i }) => `<option value="${i}">${conflicts?.has(f.filename) ? '⚠ ' : ''}${esc(f.filename)}</option>`).join('');
+  if (q) {
+    $('#filesSummary').insertAdjacentHTML('afterbegin', `<span class="files-found"><b>${shown.length}</b> of ${filesAll.length} files match “${esc(q)}”${filesSearch.inDiff ? ' (names and changed lines)' : ''}
+      <button class="btn btn-sm btn-invisible" type="button" data-files-clear>Clear</button></span>`);
+  }
+  $('#filesList').innerHTML = !filesAll.length ? '<div class="blankslate">No file changes.</div>'
+    : !shown.length ? `<div class="blankslate"><h3>No files match</h3><p>${filesSearch.inDiff ? 'Nothing in the file names or changed lines.' : 'Try <b>In diffs</b> to search the changed lines too.'}</p></div>`
+    : shown.map(({ f, i }, k) => {
     const name = f.previous_filename ? `${f.previous_filename} → ${f.filename}` : f.filename;
     const conflict = conflicts?.has(f.filename);
+    // Searching the diffs: open matching files so the highlights show. Otherwise the first few.
+    const open = diffMark ? !!f.patch?.toLowerCase().includes(q.toLowerCase()) && f.changes < 2000 : k < 3 && f.changes < 400;
     return `
-      <details class="file${conflict ? ' is-conflict' : ''}" id="file-${i}" ${i < 3 && f.changes < 400 ? 'open' : ''}>
+      <details class="file${conflict ? ' is-conflict' : ''}" id="file-${i}" ${open ? 'open' : ''}>
         <summary>
           ${icon('chev', 'chev')}
-          <span class="fname" title="${esc(name)}">${f.previous_filename ? `${pathHtml(f.previous_filename)} <span class="c-muted">→</span> ` : ''}${pathHtml(f.filename)}</span>
+          <span class="fname" title="${esc(name)}">${f.previous_filename ? `${pathHtml(f.previous_filename, pathTerms)} <span class="c-muted">→</span> ` : ''}${pathHtml(f.filename, pathTerms)}</span>
           <span class="fmeta">
             ${conflict ? `<span class="Label Label--danger" title="Also changed on ${esc(pr?.baseRefName ?? 'the base branch')}: likely conflict">${icon('alert')}Conflict?</span>` : ''}
             <span class="Label ${statusLabel[f.status] ?? ''}">${esc(f.status)}</span>
@@ -1247,10 +1272,10 @@ function renderFiles(): void {
           </span>
         </summary>
         ${f.patch
-          ? `<div class="diff-wrap"><table class="diff">${renderPatch(f.patch)}</table></div>`
+          ? `<div class="diff-wrap"><table class="diff">${renderPatch(f.patch, diffMark)}</table></div>`
           : `<div class="diff-note">Binary file or diff too large to show. <a href="${safeUrl(f.blob_url)}" target="_blank" rel="noopener noreferrer">View on GitHub</a></div>`}
       </details>`;
-  }).join('') : '<div class="blankslate">No file changes.</div>';
+  }).join('');
 }
 
 // ---------- Key checks (per repository) ----------
@@ -2038,6 +2063,46 @@ function init(): void {
     const sel = e.target as HTMLSelectElement;
     if (sel.value) jumpToFile(Number(sel.value));
     sel.value = '';
+  });
+  // Search changed files (debounced: each change re-renders the diffs).
+  let filesSearchTimer = 0;
+  const applyFilesSearch = () => {
+    clearTimeout(filesSearchTimer);
+    filesSearch.q = $<HTMLInputElement>('#filesQ').value.trim();
+    $('#filesFold').textContent = 'Collapse all';
+    renderFiles();
+    $('#filesBody').scrollTop = 0;
+  };
+  $('#filesQ').addEventListener('input', () => {
+    clearTimeout(filesSearchTimer);
+    filesSearchTimer = window.setTimeout(applyFilesSearch, 200);
+  });
+  $('#filesQ').addEventListener('keydown', (e) => {
+    const k = (e as KeyboardEvent).key;
+    if (k === 'Enter') { applyFilesSearch(); ($('#filesQ') as HTMLInputElement).blur(); }
+    if (k === 'Escape' && $<HTMLInputElement>('#filesQ').value) {
+      e.stopPropagation(); // clear the search, don't close the dialog
+      $<HTMLInputElement>('#filesQ').value = '';
+      applyFilesSearch();
+    }
+  });
+  $('#filesInDiff').addEventListener('click', () => {
+    filesSearch.inDiff = !filesSearch.inDiff;
+    $('#filesInDiff').setAttribute('aria-pressed', String(filesSearch.inDiff));
+    if (filesSearch.q) applyFilesSearch();
+  });
+  $('#filesSummary').addEventListener('click', (e) => {
+    if (!(e.target as HTMLElement).closest('[data-files-clear]')) return;
+    $<HTMLInputElement>('#filesQ').value = '';
+    applyFilesSearch();
+  });
+  // "/" jumps to the search box while Files changed is the top dialog.
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== '/' || !isDialogOpen('#filesSheet') || (e.target as HTMLElement).closest('input, textarea, select')) return;
+    const top = [...document.querySelectorAll<HTMLElement>('.Overlay-backdrop:not(.hidden)')].sort((a, b) => +a.style.zIndex - +b.style.zIndex).pop();
+    if (top?.id !== 'filesSheet') return;
+    e.preventDefault();
+    $('#filesQ').focus();
   });
   $('#filesFold').addEventListener('click', () => {
     const btn = $('#filesFold');
